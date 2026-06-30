@@ -1,0 +1,489 @@
+<!DOCTYPE html>
+<html lang="hi" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta name="description" content="Pareshaan - Apne daily tasks aur reminders manage karo. Made by Manish Rajdoot." />
+  <meta name="theme-color" content="#7c3aed" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Pareshaan" />
+  <meta name="msapplication-TileColor" content="#7c3aed" />
+  <meta name="msapplication-TileImage" content="icons/icon-144.png" />
+
+  <title>Pareshaan ⏰</title>
+
+  <!-- PWA Manifest -->
+  <link rel="manifest" href="manifest.json" />
+
+  <!-- Apple Touch Icons -->
+  <link rel="apple-touch-icon" href="icons/icon-192.png" />
+  <link rel="apple-touch-icon" sizes="152x152" href="icons/icon-152.png" />
+  <link rel="apple-touch-icon" sizes="144x144" href="icons/icon-144.png" />
+  <link rel="apple-touch-icon" sizes="128x128" href="icons/icon-128.png" />
+
+  <!-- Favicon -->
+  <link rel="icon" type="image/png" sizes="32x32" href="icons/icon-96.png" />
+  <link rel="icon" type="image/png" sizes="16x16" href="icons/icon-72.png" />
+
+  <!-- Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700;800&family=Nunito:wght@400;600;700;800&display=swap" rel="stylesheet" />
+
+  <!-- Main Stylesheet -->
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <!-- Splash Screen -->
+  <div id="splash-screen">
+    <div class="splash-content">
+      <div class="splash-icon">⏰</div>
+      <h1 class="splash-title">Pareshaan</h1>
+      <p class="splash-sub">Stay on track. Stay focused.</p>
+      <div class="splash-loader">
+        <div class="loader-bar"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Install Banner -->
+  <div id="install-banner" class="hidden">
+    <div class="install-content">
+      <span class="install-icon">📲</span>
+      <div class="install-text">
+        <strong>Install Pareshaan</strong>
+        <small>Home screen par add karo!</small>
+      </div>
+      <button id="install-btn" class="btn-install">Install</button>
+      <button id="install-close" class="btn-close-install">✕</button>
+    </div>
+  </div>
+
+  <!-- Main App -->
+  <div id="app" class="hidden">
+
+    <!-- Header -->
+    <header class="app-header">
+      <div class="header-left">
+        <div class="app-logo">⏰</div>
+        <div class="header-title">
+          <h1>Pareshaan</h1>
+          <span id="current-date" class="header-date"></span>
+        </div>
+      </div>
+      <div class="header-right">
+        <button id="theme-toggle" class="icon-btn" title="Toggle Theme" aria-label="Toggle dark/light mode">
+          <span id="theme-icon">☀️</span>
+        </button>
+        <button id="notif-btn" class="icon-btn" title="Enable Notifications" aria-label="Enable notifications">
+          <span>🔔</span>
+        </button>
+      </div>
+    </header>
+
+    <!-- Live Clock -->
+    <section class="clock-section">
+      <div class="clock-card">
+        <div id="live-clock" class="live-clock">00:00:00</div>
+        <div id="live-day" class="live-day">Monday</div>
+        <div class="clock-decoration">
+          <div class="pulse-ring"></div>
+          <div class="pulse-ring delay-1"></div>
+          <div class="pulse-ring delay-2"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Stats Bar -->
+    <section class="stats-bar">
+      <div class="stat-card">
+        <span class="stat-num" id="stat-total">0</span>
+        <span class="stat-label">Total Tasks</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-num" id="stat-done">0</span>
+        <span class="stat-label">Done</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-num" id="stat-pending">0</span>
+        <span class="stat-label">Pending</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-num" id="stat-alarms">0</span>
+        <span class="stat-label">Alarms</span>
+      </div>
+    </section>
+
+    <!-- Navigation Tabs -->
+    <nav class="tab-nav">
+      <button class="tab-btn active" data-tab="tasks">
+        <span class="tab-icon">📋</span>
+        <span>Tasks</span>
+      </button>
+      <button class="tab-btn" data-tab="alarms">
+        <span class="tab-icon">⏰</span>
+        <span>Alarms</span>
+      </button>
+      <button class="tab-btn" data-tab="reminders">
+        <span class="tab-icon">🔔</span>
+        <span>Reminders</span>
+      </button>
+      <button class="tab-btn" data-tab="about">
+        <span class="tab-icon">ℹ️</span>
+        <span>About</span>
+      </button>
+    </nav>
+
+    <!-- Tab Content -->
+    <main class="tab-content">
+
+      <!-- TASKS TAB -->
+      <section id="tab-tasks" class="tab-panel active">
+        <div class="panel-header">
+          <h2>📋 My Tasks</h2>
+          <button class="btn-add" id="add-task-btn">+ Add Task</button>
+        </div>
+
+        <!-- Filter Chips -->
+        <div class="filter-chips">
+          <button class="chip active" data-filter="all">All</button>
+          <button class="chip" data-filter="pending">Pending</button>
+          <button class="chip" data-filter="done">Completed</button>
+          <button class="chip" data-filter="high">🔴 High</button>
+          <button class="chip" data-filter="medium">🟡 Medium</button>
+          <button class="chip" data-filter="low">🟢 Low</button>
+        </div>
+
+        <!-- Task List -->
+        <div id="task-list" class="task-list">
+          <div class="empty-state" id="tasks-empty">
+            <div class="empty-icon">📝</div>
+            <h3>Koi task nahi hai!</h3>
+            <p>Apna pehla task add karo aur shuru ho jao.</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ALARMS TAB -->
+      <section id="tab-alarms" class="tab-panel">
+        <div class="panel-header">
+          <h2>⏰ Alarms</h2>
+          <button class="btn-add" id="add-alarm-btn">+ Add Alarm</button>
+        </div>
+
+        <!-- Alarm List -->
+        <div id="alarm-list" class="alarm-list">
+          <div class="empty-state" id="alarms-empty">
+            <div class="empty-icon">⏰</div>
+            <h3>Koi alarm nahi hai!</h3>
+            <p>Apna pehla alarm set karo.</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- REMINDERS TAB -->
+      <section id="tab-reminders" class="tab-panel">
+        <div class="panel-header">
+          <h2>🔔 Daily Reminders</h2>
+          <button class="btn-add" id="add-reminder-btn">+ Add Reminder</button>
+        </div>
+
+        <!-- Daily Reminder Toggle -->
+        <div class="reminder-daily-card">
+          <div class="reminder-daily-info">
+            <span class="reminder-daily-icon">🌅</span>
+            <div>
+              <strong>Daily Morning Reminder</strong>
+              <small>Roz subah yaad dilata rahe</small>
+            </div>
+          </div>
+          <label class="toggle-switch">
+            <input type="checkbox" id="daily-reminder-toggle" />
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+
+        <div class="reminder-time-row" id="daily-time-row" style="display:none;">
+          <label>Reminder Time:</label>
+          <input type="time" id="daily-reminder-time" value="08:00" class="time-input" />
+          <button class="btn-save-small" id="save-daily-time">Save</button>
+        </div>
+
+        <!-- Reminder List -->
+        <div id="reminder-list" class="reminder-list">
+          <div class="empty-state" id="reminders-empty">
+            <div class="empty-icon">🔔</div>
+            <h3>Koi reminder nahi hai!</h3>
+            <p>Apna pehla reminder add karo.</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ABOUT TAB -->
+      <section id="tab-about" class="tab-panel">
+        <div class="about-card">
+          <div class="about-logo">⏰</div>
+          <h2 class="about-title">Pareshaan</h2>
+          <p class="about-version">Version 1.0.0</p>
+          <p class="about-desc">
+            Pareshaan ek smart daily task manager aur reminder app hai jo aapko apne kaam yaad dilata rehta hai. 
+            Kabhi mat bhulo koi kaam — Pareshaan hai na! 😄
+          </p>
+          <div class="about-features">
+            <div class="feature-item">✅ Daily Task Management</div>
+            <div class="feature-item">⏰ Smart Alarms</div>
+            <div class="feature-item">🔔 Push Notifications</div>
+            <div class="feature-item">📳 Vibration Alerts</div>
+            <div class="feature-item">🔊 Audio Sounds</div>
+            <div class="feature-item">🌙 Dark / Light Mode</div>
+            <div class="feature-item">📱 Mobile Installable (PWA)</div>
+            <div class="feature-item">💾 Offline Data Storage</div>
+          </div>
+          <div class="about-divider"></div>
+          <div class="about-made">
+            <span class="made-heart">❤️</span>
+            <span>Made with love by</span>
+            <strong class="made-name">Manish Rajdoot</strong>
+          </div>
+          <div class="about-social">
+            <a href="https://github.com/manishrajdoot" target="_blank" class="social-link">
+              <span>🐙</span> GitHub
+            </a>
+          </div>
+          <div class="about-actions">
+            <button class="btn-danger" id="clear-all-data">🗑️ Clear All Data</button>
+          </div>
+        </div>
+      </section>
+
+    </main>
+
+    <!-- Floating Action Button -->
+    <button class="fab" id="fab-btn" title="Quick Add">
+      <span class="fab-icon">+</span>
+    </button>
+
+    <!-- FAB Menu -->
+    <div class="fab-menu hidden" id="fab-menu">
+      <button class="fab-item" id="fab-task">
+        <span>📋</span> Add Task
+      </button>
+      <button class="fab-item" id="fab-alarm">
+        <span>⏰</span> Add Alarm
+      </button>
+      <button class="fab-item" id="fab-reminder">
+        <span>🔔</span> Add Reminder
+      </button>
+    </div>
+    <div class="fab-overlay hidden" id="fab-overlay"></div>
+
+  </div><!-- end #app -->
+
+  <!-- ==================== MODALS ==================== -->
+
+  <!-- Add/Edit Task Modal -->
+  <div class="modal-overlay hidden" id="task-modal">
+    <div class="modal">
+      <div class="modal-header">
+        <h3 id="task-modal-title">📋 Add New Task</h3>
+        <button class="modal-close" data-close="task-modal">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label>Task Title *</label>
+          <input type="text" id="task-title" placeholder="Kya karna hai?" class="form-input" maxlength="100" />
+        </div>
+        <div class="form-group">
+          <label>Description</label>
+          <textarea id="task-desc" placeholder="Thodi detail do..." class="form-textarea" rows="3" maxlength="300"></textarea>
+        </div>
+        <div class="form-row">
+          <div class="form-group half">
+            <label>Priority</label>
+            <select id="task-priority" class="form-select">
+              <option value="high">🔴 High</option>
+              <option value="medium" selected>🟡 Medium</option>
+              <option value="low">🟢 Low</option>
+            </select>
+          </div>
+          <div class="form-group half">
+            <label>Category</label>
+            <select id="task-category" class="form-select">
+              <option value="personal">👤 Personal</option>
+              <option value="work">💼 Work</option>
+              <option value="health">❤️ Health</option>
+              <option value="study">📚 Study</option>
+              <option value="finance">💰 Finance</option>
+              <option value="other">📌 Other</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group half">
+            <label>Due Date</label>
+            <input type="date" id="task-date" class="form-input" />
+          </div>
+          <div class="form-group half">
+            <label>Due Time</label>
+            <input type="time" id="task-time" class="form-input" />
+          </div>
+        </div>
+        <div class="form-group">
+          <label class="checkbox-label">
+            <input type="checkbox" id="task-reminder-check" />
+            <span class="checkmark"></span>
+            Set reminder for this task
+          </label>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-secondary" data-close="task-modal">Cancel</button>
+        <button class="btn-primary" id="save-task-btn">💾 Save Task</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Add/Edit Alarm Modal -->
+  <div class="modal-overlay hidden" id="alarm-modal">
+    <div class="modal">
+      <div class="modal-header">
+        <h3 id="alarm-modal-title">⏰ Add New Alarm</h3>
+        <button class="modal-close" data-close="alarm-modal">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label>Alarm Label</label>
+          <input type="text" id="alarm-label" placeholder="Alarm ka naam..." class="form-input" maxlength="60" />
+        </div>
+        <div class="form-group">
+          <label>Alarm Time *</label>
+          <input type="time" id="alarm-time" class="form-input time-big" />
+        </div>
+        <div class="form-group">
+          <label>Repeat</label>
+          <div class="day-picker">
+            <button class="day-btn" data-day="0">Su</button>
+            <button class="day-btn" data-day="1">Mo</button>
+            <button class="day-btn" data-day="2">Tu</button>
+            <button class="day-btn" data-day="3">We</button>
+            <button class="day-btn" data-day="4">Th</button>
+            <button class="day-btn" data-day="5">Fr</button>
+            <button class="day-btn" data-day="6">Sa</button>
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Sound</label>
+          <select id="alarm-sound" class="form-select">
+            <option value="bell">🔔 Bell</option>
+            <option value="beep">📢 Beep</option>
+            <option value="chime">🎵 Chime</option>
+            <option value="digital">💻 Digital</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="checkbox-label">
+            <input type="checkbox" id="alarm-vibrate" checked />
+            <span class="checkmark"></span>
+            Vibration on alarm
+          </label>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-secondary" data-close="alarm-modal">Cancel</button>
+        <button class="btn-primary" id="save-alarm-btn">💾 Save Alarm</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Add/Edit Reminder Modal -->
+  <div class="modal-overlay hidden" id="reminder-modal">
+    <div class="modal">
+      <div class="modal-header">
+        <h3 id="reminder-modal-title">🔔 Add Reminder</h3>
+        <button class="modal-close" data-close="reminder-modal">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label>Reminder Title *</label>
+          <input type="text" id="reminder-title" placeholder="Kya yaad dilana hai?" class="form-input" maxlength="80" />
+        </div>
+        <div class="form-group">
+          <label>Message</label>
+          <textarea id="reminder-msg" placeholder="Reminder message..." class="form-textarea" rows="2" maxlength="200"></textarea>
+        </div>
+        <div class="form-row">
+          <div class="form-group half">
+            <label>Date</label>
+            <input type="date" id="reminder-date" class="form-input" />
+          </div>
+          <div class="form-group half">
+            <label>Time *</label>
+            <input type="time" id="reminder-time" class="form-input" />
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Repeat</label>
+          <select id="reminder-repeat" class="form-select">
+            <option value="once">Once</option>
+            <option value="daily">Daily</option>
+            <option value="weekly">Weekly</option>
+            <option value="weekdays">Weekdays</option>
+          </select>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-secondary" data-close="reminder-modal">Cancel</button>
+        <button class="btn-primary" id="save-reminder-btn">💾 Save Reminder</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Alarm Ringing Modal -->
+  <div class="modal-overlay hidden" id="alarm-ring-modal">
+    <div class="modal alarm-ring-modal">
+      <div class="ring-animation">
+        <div class="ring-icon">⏰</div>
+        <div class="ring-waves">
+          <div class="wave"></div>
+          <div class="wave delay-1"></div>
+          <div class="wave delay-2"></div>
+        </div>
+      </div>
+      <h2 id="ring-label">Wake Up!</h2>
+      <p id="ring-time" class="ring-time">00:00</p>
+      <div class="ring-actions">
+        <button class="btn-snooze" id="snooze-btn">😴 Snooze 5 min</button>
+        <button class="btn-stop" id="stop-alarm-btn">✅ Stop</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast Notification -->
+  <div id="toast" class="toast hidden">
+    <span id="toast-icon">✅</span>
+    <span id="toast-msg">Done!</span>
+  </div>
+
+  <!-- Confirm Dialog -->
+  <div class="modal-overlay hidden" id="confirm-modal">
+    <div class="modal confirm-modal">
+      <div class="modal-header">
+        <h3>⚠️ Confirm</h3>
+      </div>
+      <div class="modal-body">
+        <p id="confirm-msg">Are you sure?</p>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-secondary" id="confirm-cancel">Cancel</button>
+        <button class="btn-danger" id="confirm-ok">Delete</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Main JS -->
+  <script src="app.js"></script>
+</body>
+</html>
