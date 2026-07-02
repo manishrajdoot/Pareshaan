@@ -1,7 +1,7 @@
 /**
  * PARESHAAN - Main Application Script
  * Made by Manish Rajdoot
- * Version 1.0.0
+ * Version 3.0.0
  */
 
 'use strict';
@@ -11,6 +11,7 @@
 // =============================================
 
 const APP_KEY = 'pareshaan_data';
+const APP_VERSION = '3.0.0';
 
 const defaultState = {
   tasks: [],
@@ -18,9 +19,15 @@ const defaultState = {
   reminders: [],
   settings: {
     theme: 'dark',
+    accentColor: 'purple',
+    language: 'en',
     dailyReminder: false,
     dailyReminderTime: '08:00',
-    notificationsEnabled: false
+    notificationsEnabled: false,
+    snoozeMinutes: 5,
+    pinEnabled: false,
+    pinCode: '',
+    lastBackupPrompt: 0
   }
 };
 
@@ -34,6 +41,79 @@ let alarmCheckInterval = null;
 let confirmCallback = null;
 let deferredInstallPrompt = null;
 let selectedDays = [];
+let taskSearchQuery = '';
+let taskSortMode = 'default';
+let lastDeleted = null;
+let undoTimeout = null;
+let newServiceWorker = null;
+let modalSubtasks = [];
+let pendingCustomSound = null;
+let bulkMode = false;
+let selectedTaskIds = new Set();
+let calendarViewDate = new Date();
+let calendarSelectedDate = null;
+let calendarMode = 'month';
+let locationWatchId = null;
+let sessionUnlocked = false;
+let draggedTaskId = null;
+
+// =============================================
+// TRANSLATIONS (EN / HI)
+// =============================================
+
+const TRANSLATIONS = {
+  en: {
+    tagline: 'Stay on track. Stay focused.',
+    tab_tasks: 'Tasks', tab_alarms: 'Alarms', tab_reminders: 'Reminders',
+    tab_calendar: 'Calendar', tab_insights: 'Insights', tab_settings: 'Settings', tab_about: 'About',
+    my_tasks: '📋 My Tasks', add_task: '+ Add Task',
+    my_alarms: '⏰ Alarms', add_alarm: '+ Add Alarm',
+    daily_reminders: '🔔 Daily Reminders', add_reminder: '+ Add Reminder',
+    calendar_title: '📅 Calendar', insights_title: '📊 Insights', settings_title: '⚙️ Settings',
+    search_placeholder: 'Search tasks or tags...',
+    select_btn: '☑ Select', cancel_btn: 'Cancel', done_btn: 'Done',
+    complete_btn: '✅ Complete', delete_btn: '🗑️ Delete',
+    empty_tasks_title: 'No tasks yet!', empty_tasks_desc: 'Add your first task and get started.',
+    empty_search_title: 'No matching tasks!', empty_search_desc: 'Try a different search term.',
+    empty_alarms_title: 'No alarms yet!', empty_alarms_desc: 'Set your first alarm.',
+    empty_reminders_title: 'No reminders yet!', empty_reminders_desc: 'Add your first reminder.',
+    daily_morning: 'Daily Morning Reminder', daily_morning_desc: 'Get reminded every morning',
+    week_progress: 'Overall Progress'
+  },
+  hi: {
+    tagline: 'काम पर ध्यान दो, फोकस में रहो।',
+    tab_tasks: 'कार्य', tab_alarms: 'अलार्म', tab_reminders: 'रिमाइंडर',
+    tab_calendar: 'कैलेंडर', tab_insights: 'जानकारी', tab_settings: 'सेटिंग्स', tab_about: 'ऐप के बारे में',
+    my_tasks: '📋 मेरे कार्य', add_task: '+ कार्य जोड़ें',
+    my_alarms: '⏰ अलार्म', add_alarm: '+ अलार्म जोड़ें',
+    daily_reminders: '🔔 रोज़ के रिमाइंडर', add_reminder: '+ रिमाइंडर जोड़ें',
+    calendar_title: '📅 कैलेंडर', insights_title: '📊 जानकारी', settings_title: '⚙️ सेटिंग्स',
+    search_placeholder: 'कार्य या टैग खोजें...',
+    select_btn: '☑ चुनें', cancel_btn: 'रद्द करें', done_btn: 'हो गया',
+    complete_btn: '✅ पूरा करें', delete_btn: '🗑️ हटाएं',
+    empty_tasks_title: 'अभी कोई कार्य नहीं!', empty_tasks_desc: 'अपना पहला कार्य जोड़ें और शुरू करें।',
+    empty_search_title: 'कोई मेल खाता कार्य नहीं!', empty_search_desc: 'कोई और शब्द खोजें।',
+    empty_alarms_title: 'अभी कोई अलार्म नहीं!', empty_alarms_desc: 'अपना पहला अलार्म सेट करें।',
+    empty_reminders_title: 'अभी कोई रिमाइंडर नहीं!', empty_reminders_desc: 'अपना पहला रिमाइंडर जोड़ें।',
+    daily_morning: 'सुबह का रिमाइंडर', daily_morning_desc: 'हर सुबह याद दिलाया जाएगा',
+    week_progress: 'कुल प्रगति'
+  }
+};
+
+function t(key) {
+  const lang = state.settings.language || 'en';
+  return (TRANSLATIONS[lang] && TRANSLATIONS[lang][key]) || TRANSLATIONS.en[key] || key;
+}
+
+function applyTranslations() {
+  document.querySelectorAll('[data-i18n]').forEach(el => {
+    el.textContent = t(el.dataset.i18n);
+  });
+  document.querySelectorAll('[data-i18n-placeholder]').forEach(el => {
+    el.placeholder = t(el.dataset.i18nPlaceholder);
+  });
+  document.documentElement.lang = state.settings.language === 'hi' ? 'hi' : 'en';
+}
 
 // =============================================
 // UTILITY FUNCTIONS
@@ -48,7 +128,20 @@ function loadState() {
     const saved = localStorage.getItem(APP_KEY);
     if (saved) {
       const parsed = JSON.parse(saved);
-      return { ...defaultState, ...parsed, settings: { ...defaultState.settings, ...parsed.settings } };
+      const merged = { ...defaultState, ...parsed, settings: { ...defaultState.settings, ...parsed.settings } };
+      merged.tasks = (merged.tasks || []).map((task, i) => ({
+        subtasks: [], tags: [], link: '', recurrence: 'none', order: i,
+        ...task
+      }));
+      merged.alarms = (merged.alarms || []).map(alarm => ({
+        group: '', customSound: null, customSoundName: '',
+        ...alarm
+      }));
+      merged.reminders = (merged.reminders || []).map(reminder => ({
+        locationEnabled: false, locationLat: null, locationLng: null, locationRadius: 300, locationLabel: '',
+        ...reminder
+      }));
+      return merged;
     }
   } catch (e) { console.warn('State load error:', e); }
   return JSON.parse(JSON.stringify(defaultState));
@@ -57,7 +150,10 @@ function loadState() {
 function saveState() {
   try {
     localStorage.setItem(APP_KEY, JSON.stringify(state));
-  } catch (e) { console.warn('State save error:', e); }
+  } catch (e) {
+    console.warn('State save error:', e);
+    showToast('⚠️', 'Storage is full — try removing a custom alarm sound.');
+  }
 }
 
 function formatTime12(time24) {
@@ -90,12 +186,33 @@ function getTodayDateString() {
   return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
 }
 
+function dateStringFromDate(d) {
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+}
+
+function addDaysToDateString(dateStr, days) {
+  const d = new Date(dateStr + 'T00:00:00');
+  d.setDate(d.getDate() + days);
+  return dateStringFromDate(d);
+}
+
+function haversineDistance(lat1, lon1, lat2, lon2) {
+  const R = 6371000;
+  const toRad = deg => deg * Math.PI / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a = Math.sin(dLat/2) ** 2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon/2) ** 2;
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+  return R * c;
+}
+
 // =============================================
 // AUDIO ENGINE
 // =============================================
 
 const AudioEngine = {
   ctx: null,
+  customAudioEl: null,
 
   getCtx() {
     if (!this.ctx) {
@@ -124,9 +241,7 @@ const AudioEngine = {
       osc.stop(ctx.currentTime + 0.8);
     };
     play();
-    if (repeat) {
-      return setInterval(play, 1200);
-    }
+    if (repeat) return setInterval(play, 1200);
   },
 
   playBeep(repeat = false) {
@@ -193,7 +308,28 @@ const AudioEngine = {
     if (repeat) return setInterval(play, 1800);
   },
 
-  playSound(type, repeat = false) {
+  playCustom(dataUrl, repeat = false) {
+    if (!this.customAudioEl) {
+      this.customAudioEl = document.getElementById('custom-alarm-audio');
+    }
+    const el = this.customAudioEl;
+    if (!el) return null;
+    el.src = dataUrl;
+    el.loop = !!repeat;
+    el.currentTime = 0;
+    el.play().catch(() => {});
+    return 'custom';
+  },
+
+  stopCustom() {
+    if (this.customAudioEl) {
+      this.customAudioEl.pause();
+      this.customAudioEl.currentTime = 0;
+    }
+  },
+
+  playSound(type, repeat = false, customDataUrl = null) {
+    if (customDataUrl) return this.playCustom(customDataUrl, repeat);
     switch(type) {
       case 'bell': return this.playBell(repeat);
       case 'beep': return this.playBeep(repeat);
@@ -208,7 +344,8 @@ const AudioEngine = {
   },
 
   stopInterval(intervalId) {
-    if (intervalId) clearInterval(intervalId);
+    if (intervalId && intervalId !== 'custom') clearInterval(intervalId);
+    if (intervalId === 'custom') this.stopCustom();
   }
 };
 
@@ -243,12 +380,12 @@ const VibrationEngine = {
 const NotificationManager = {
   async requestPermission() {
     if (!('Notification' in window)) {
-      showToast('❌', 'Notifications supported nahi hai is browser mein');
+      showToast('❌', 'Notifications are not supported in this browser');
       return false;
     }
     if (Notification.permission === 'granted') return true;
     if (Notification.permission === 'denied') {
-      showToast('❌', 'Notifications blocked hai. Browser settings mein allow karo.');
+      showToast('❌', 'Notifications are blocked. Allow them in your browser settings.');
       return false;
     }
     const result = await Notification.requestPermission();
@@ -290,13 +427,54 @@ const NotificationManager = {
 };
 
 // =============================================
+// PIN LOCK
+// =============================================
+
+const PinLock = {
+  isLockedNow() {
+    return state.settings.pinEnabled && !!state.settings.pinCode && !sessionUnlocked;
+  },
+
+  showLockScreen() {
+    const overlay = document.getElementById('pin-lock-overlay');
+    if (overlay) overlay.classList.remove('hidden');
+    document.getElementById('app')?.classList.add('hidden');
+    document.getElementById('splash-screen')?.classList.add('hidden');
+    setTimeout(() => document.getElementById('pin-input')?.focus(), 200);
+  },
+
+  hideLockScreen() {
+    document.getElementById('pin-lock-overlay')?.classList.add('hidden');
+  },
+
+  verify(code) {
+    if (code === state.settings.pinCode) {
+      sessionUnlocked = true;
+      this.hideLockScreen();
+      const errEl = document.getElementById('pin-error');
+      if (errEl) errEl.classList.add('hidden');
+      const input = document.getElementById('pin-input');
+      if (input) input.value = '';
+      startAppAfterUnlock();
+      return true;
+    }
+    const errEl = document.getElementById('pin-error');
+    if (errEl) errEl.classList.remove('hidden');
+    VibrationEngine.vibrate([100, 50, 100, 50, 100]);
+    const input = document.getElementById('pin-input');
+    if (input) { input.value = ''; input.focus(); }
+    return false;
+  }
+};
+
+// =============================================
 // ALARM SYSTEM
 // =============================================
 
 const AlarmSystem = {
   start() {
     if (alarmCheckInterval) clearInterval(alarmCheckInterval);
-    alarmCheckInterval = setInterval(() => this.check(), 10000); // check every 10s
+    alarmCheckInterval = setInterval(() => this.check(), 10000);
     this.check();
   },
 
@@ -305,7 +483,6 @@ const AlarmSystem = {
     const currentTime = `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`;
     const currentDay = now.getDay();
 
-    // Check alarms
     state.alarms.forEach(alarm => {
       if (!alarm.active) return;
       if (alarm.time !== currentTime) return;
@@ -319,7 +496,6 @@ const AlarmSystem = {
       this.ring(alarm);
     });
 
-    // Check reminders
     state.reminders.forEach(reminder => {
       if (!reminder.active) return;
       if (!reminder.time) return;
@@ -344,7 +520,6 @@ const AlarmSystem = {
       this.fireReminder(reminder);
     });
 
-    // Check task reminders
     state.tasks.forEach(task => {
       if (task.done || !task.reminder || !task.time || !task.date) return;
       if (task.date !== getTodayDateString()) return;
@@ -359,7 +534,6 @@ const AlarmSystem = {
   },
 
   ring(alarm) {
-    // Show ring modal
     const modal = document.getElementById('alarm-ring-modal');
     const labelEl = document.getElementById('ring-label');
     const timeEl = document.getElementById('ring-time');
@@ -369,20 +543,17 @@ const AlarmSystem = {
       modal.classList.remove('hidden');
     }
 
-    // Play sound
-    if (activeAlarmInterval) clearInterval(activeAlarmInterval);
-    activeAlarmInterval = AudioEngine.playSound(alarm.sound || 'bell', true);
+    if (activeAlarmInterval) AudioEngine.stopInterval(activeAlarmInterval);
+    activeAlarmInterval = AudioEngine.playSound(alarm.sound || 'bell', true, alarm.customSound || null);
 
-    // Vibrate
     if (alarm.vibrate !== false) {
       VibrationEngine.alarmVibrate();
       activeAlarmInterval && setTimeout(() => VibrationEngine.alarmVibrate(), 2000);
     }
 
-    // Notification
     NotificationManager.showViaServiceWorker(
       `⏰ ${alarm.label || 'Alarm'}`,
-      `Time: ${formatTime12(alarm.time)} — Uthho!`,
+      `Time: ${formatTime12(alarm.time)} — Wake up!`,
       'alarm-ring'
     );
   },
@@ -392,7 +563,7 @@ const AlarmSystem = {
     VibrationEngine.notificationVibrate();
     NotificationManager.showViaServiceWorker(
       `🔔 ${reminder.title}`,
-      reminder.message || 'Aapka reminder time ho gaya!',
+      reminder.message || 'It\'s time for your reminder!',
       'reminder-' + reminder.id
     );
     showToast('🔔', reminder.title);
@@ -403,7 +574,7 @@ const AlarmSystem = {
     VibrationEngine.notificationVibrate();
     NotificationManager.showViaServiceWorker(
       `📋 Task Reminder: ${task.title}`,
-      task.desc || 'Ye task complete karna hai!',
+      task.desc || 'This task is due now!',
       'task-' + task.id
     );
     showToast('📋', `Task: ${task.title}`);
@@ -411,7 +582,7 @@ const AlarmSystem = {
 
   stopRinging() {
     if (activeAlarmInterval) {
-      clearInterval(activeAlarmInterval);
+      AudioEngine.stopInterval(activeAlarmInterval);
       activeAlarmInterval = null;
     }
     VibrationEngine.stopVibrate();
@@ -420,10 +591,58 @@ const AlarmSystem = {
 
   snooze() {
     this.stopRinging();
-    const snoozeTime = new Date(Date.now() + 5 * 60 * 1000);
+    const mins = state.settings.snoozeMinutes || 5;
+    const snoozeTime = new Date(Date.now() + mins * 60 * 1000);
     const h = String(snoozeTime.getHours()).padStart(2,'0');
     const m = String(snoozeTime.getMinutes()).padStart(2,'0');
-    showToast('😴', `Snoozed! ${h}:${m} pe bajega`);
+    showToast('😴', `Snoozed! Will ring again at ${h}:${m}`);
+  }
+};
+
+// =============================================
+// LOCATION-BASED REMINDERS (foreground only)
+// =============================================
+
+const LocationReminders = {
+  start() {
+    if (!('geolocation' in navigator)) return;
+    const hasLocationReminders = state.reminders.some(r => r.active && r.locationEnabled && r.locationLat != null);
+    if (!hasLocationReminders) { this.stop(); return; }
+    if (locationWatchId != null) return;
+
+    locationWatchId = navigator.geolocation.watchPosition(
+      (pos) => this.check(pos.coords.latitude, pos.coords.longitude),
+      () => { /* permission denied or unavailable, silently ignore */ },
+      { enableHighAccuracy: false, maximumAge: 60000, timeout: 20000 }
+    );
+  },
+
+  stop() {
+    if (locationWatchId != null && 'geolocation' in navigator) {
+      navigator.geolocation.clearWatch(locationWatchId);
+      locationWatchId = null;
+    }
+  },
+
+  check(lat, lng) {
+    const todayKey = getTodayDateString();
+    state.reminders.forEach(reminder => {
+      if (!reminder.active || !reminder.locationEnabled || reminder.locationLat == null) return;
+      if (reminder.locationLastFired === todayKey) return;
+      const dist = haversineDistance(lat, lng, reminder.locationLat, reminder.locationLng);
+      if (dist <= (reminder.locationRadius || 300)) {
+        reminder.locationLastFired = todayKey;
+        saveState();
+        AudioEngine.playNotificationSound();
+        VibrationEngine.notificationVibrate();
+        NotificationManager.showViaServiceWorker(
+          `📍 ${reminder.title}`,
+          reminder.message || `You're near ${reminder.locationLabel || 'your reminder location'}!`,
+          'location-' + reminder.id
+        );
+        showToast('📍', reminder.title);
+      }
+    });
   }
 };
 
@@ -444,11 +663,11 @@ function scheduleDailyReminder() {
     VibrationEngine.notificationVibrate();
     NotificationManager.showViaServiceWorker(
       '🌅 Pareshaan — Good Morning!',
-      `Aaj ${state.tasks.filter(t => !t.done).length} tasks pending hain. Shuru ho jao!`,
+      `You have ${state.tasks.filter(t => !t.done).length} tasks pending today. Let's get started!`,
       'daily-reminder'
     );
     showToast('🌅', 'Daily reminder fired!');
-    scheduleDailyReminder(); // reschedule for next day
+    scheduleDailyReminder();
   }, delay);
 }
 
@@ -458,16 +677,38 @@ function scheduleDailyReminder() {
 
 let toastTimeout = null;
 
-function showToast(icon, msg, duration = 3000) {
+function showToast(icon, msg, duration = 3000, showUndo = false) {
   const toast = document.getElementById('toast');
   const toastIcon = document.getElementById('toast-icon');
   const toastMsg = document.getElementById('toast-msg');
+  const undoBtn = document.getElementById('toast-undo');
   if (!toast) return;
   toastIcon.textContent = icon;
   toastMsg.textContent = msg;
   toast.classList.remove('hidden');
+  if (undoBtn) undoBtn.classList.toggle('hidden', !showUndo);
   if (toastTimeout) clearTimeout(toastTimeout);
-  toastTimeout = setTimeout(() => toast.classList.add('hidden'), duration);
+  toastTimeout = setTimeout(() => {
+    toast.classList.add('hidden');
+    if (showUndo) lastDeleted = null;
+  }, duration);
+}
+
+function undoLastDelete() {
+  if (!lastDeleted) return;
+  const { type, item, index } = lastDeleted;
+  const arr = state[type];
+  const insertAt = Math.min(index, arr.length);
+  arr.splice(insertAt, 0, item);
+  saveState();
+  lastDeleted = null;
+  if (toastTimeout) clearTimeout(toastTimeout);
+  document.getElementById('toast')?.classList.add('hidden');
+
+  if (type === 'tasks') { renderTasks(getCurrentFilter()); updateStats(); }
+  if (type === 'alarms') { renderAlarms(); updateStats(); }
+  if (type === 'reminders') { renderReminders(); }
+  showToast('↩️', 'Restored!');
 }
 
 // =============================================
@@ -484,8 +725,25 @@ function showConfirm(msg, callback) {
 }
 
 // =============================================
-// THEME MANAGEMENT
+// THEME & ACCENT COLOR
 // =============================================
+
+const ACCENT_COLORS = {
+  purple: { primary: '#7c3aed', light: '#9d5cf5', dark: '#5b21b6', accent: '#ec4899' },
+  blue:   { primary: '#2563eb', light: '#60a5fa', dark: '#1e3a8a', accent: '#06b6d4' },
+  green:  { primary: '#059669', light: '#34d399', dark: '#065f46', accent: '#84cc16' },
+  pink:   { primary: '#db2777', light: '#f472b6', dark: '#9d174d', accent: '#f59e0b' },
+  orange: { primary: '#ea580c', light: '#fb923c', dark: '#9a3412', accent: '#eab308' }
+};
+
+function applyAccentColor(name) {
+  const colors = ACCENT_COLORS[name] || ACCENT_COLORS.purple;
+  const root = document.documentElement.style;
+  root.setProperty('--primary', colors.primary);
+  root.setProperty('--primary-light', colors.light);
+  root.setProperty('--primary-dark', colors.dark);
+  root.setProperty('--accent', colors.accent);
+}
 
 function applyTheme(theme) {
   document.documentElement.setAttribute('data-theme', theme);
@@ -525,7 +783,7 @@ function updateClock() {
 }
 
 // =============================================
-// STATS UPDATE
+// STATS & STREAK
 // =============================================
 
 function updateStats() {
@@ -538,6 +796,63 @@ function updateStats() {
   document.getElementById('stat-done').textContent = done;
   document.getElementById('stat-pending').textContent = pending;
   document.getElementById('stat-alarms').textContent = alarms;
+
+  const percent = total > 0 ? Math.round((done / total) * 100) : 0;
+  const fill = document.getElementById('progress-fill');
+  const percentLabel = document.getElementById('progress-percent');
+  if (fill) fill.style.width = `${percent}%`;
+  if (percentLabel) percentLabel.textContent = `${percent}%`;
+}
+
+function getCompletionDatesSet() {
+  const set = new Set();
+  state.tasks.forEach(t => {
+    if (t.done && t.completedAt) {
+      set.add(dateStringFromDate(new Date(t.completedAt)));
+    }
+  });
+  return set;
+}
+
+function getCurrentStreak() {
+  const dates = getCompletionDatesSet();
+  let streak = 0;
+  let cursor = new Date();
+  // if nothing done today yet, streak can still count from yesterday backwards
+  if (!dates.has(dateStringFromDate(cursor))) {
+    cursor.setDate(cursor.getDate() - 1);
+  }
+  while (dates.has(dateStringFromDate(cursor))) {
+    streak++;
+    cursor.setDate(cursor.getDate() - 1);
+  }
+  return streak;
+}
+
+function getLast7DaysCompletionCounts() {
+  const counts = [];
+  for (let i = 6; i >= 0; i--) {
+    const d = new Date();
+    d.setDate(d.getDate() - i);
+    const key = dateStringFromDate(d);
+    const count = state.tasks.filter(t => t.done && t.completedAt && dateStringFromDate(new Date(t.completedAt)) === key).length;
+    counts.push({ date: key, label: d.toLocaleDateString('en-IN', { weekday: 'short' }), count });
+  }
+  return counts;
+}
+
+function getCategoryBreakdown() {
+  const catEmoji = { personal: '👤', work: '💼', health: '❤️', study: '📚', finance: '💰', other: '📌' };
+  const counts = {};
+  state.tasks.forEach(t => {
+    const cat = t.category || 'other';
+    counts[cat] = (counts[cat] || 0) + 1;
+  });
+  const total = state.tasks.length || 1;
+  return Object.keys(counts).map(cat => ({
+    cat, emoji: catEmoji[cat] || '📌', count: counts[cat],
+    percent: Math.round((counts[cat] / total) * 100)
+  })).sort((a, b) => b.count - a.count);
 }
 
 // =============================================
@@ -550,42 +865,112 @@ function renderTasks(filter = 'all') {
   if (!list) return;
 
   let tasks = [...state.tasks];
+  const today = getTodayDateString();
   switch (filter) {
     case 'pending': tasks = tasks.filter(t => !t.done); break;
     case 'done': tasks = tasks.filter(t => t.done); break;
+    case 'today': tasks = tasks.filter(t => t.date === today); break;
+    case 'overdue': tasks = tasks.filter(t => !t.done && isOverdue(t.date, t.time)); break;
     case 'high': tasks = tasks.filter(t => t.priority === 'high'); break;
     case 'medium': tasks = tasks.filter(t => t.priority === 'medium'); break;
     case 'low': tasks = tasks.filter(t => t.priority === 'low'); break;
   }
 
-  // Sort: pending first, then by priority
-  tasks.sort((a, b) => {
-    if (a.done !== b.done) return a.done ? 1 : -1;
-    const pOrder = { high: 0, medium: 1, low: 2 };
-    return (pOrder[a.priority] || 1) - (pOrder[b.priority] || 1);
-  });
+  if (taskSearchQuery.trim()) {
+    const q = taskSearchQuery.trim().toLowerCase();
+    tasks = tasks.filter(t =>
+      (t.title || '').toLowerCase().includes(q) ||
+      (t.desc || '').toLowerCase().includes(q) ||
+      (t.tags || []).some(tag => tag.toLowerCase().includes(q))
+    );
+  }
 
-  // Remove old cards (keep empty state)
+  const pOrder = { high: 0, medium: 1, low: 2 };
+  switch (taskSortMode) {
+    case 'newest':
+      tasks.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+      break;
+    case 'oldest':
+      tasks.sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+      break;
+    case 'priority':
+      tasks.sort((a, b) => (pOrder[a.priority] ?? 1) - (pOrder[b.priority] ?? 1));
+      break;
+    case 'due':
+      tasks.sort((a, b) => {
+        if (!a.date && !b.date) return 0;
+        if (!a.date) return 1;
+        if (!b.date) return -1;
+        return `${a.date}${a.time || ''}`.localeCompare(`${b.date}${b.time || ''}`);
+      });
+      break;
+    case 'az':
+      tasks.sort((a, b) => (a.title || '').localeCompare(b.title || ''));
+      break;
+    case 'manual':
+      tasks.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+      break;
+    default:
+      tasks.sort((a, b) => {
+        if (a.done !== b.done) return a.done ? 1 : -1;
+        return (pOrder[a.priority] ?? 1) - (pOrder[b.priority] ?? 1);
+      });
+  }
+
   const cards = list.querySelectorAll('.task-card');
   cards.forEach(c => c.remove());
 
   if (tasks.length === 0) {
     empty.style.display = 'block';
+    const emptyTitle = empty.querySelector('h3');
+    const emptyDesc = empty.querySelector('p');
+    if (taskSearchQuery.trim() && emptyTitle && emptyDesc) {
+      emptyTitle.textContent = t('empty_search_title');
+      emptyDesc.textContent = t('empty_search_desc');
+    } else if (emptyTitle && emptyDesc) {
+      emptyTitle.textContent = t('empty_tasks_title');
+      emptyDesc.textContent = t('empty_tasks_desc');
+    }
     return;
   }
   empty.style.display = 'none';
 
   const catEmoji = { personal: '👤', work: '💼', health: '❤️', study: '📚', finance: '💰', other: '📌' };
+  const recurIcon = { none: '', daily: '🔁 Daily', weekly: '🔁 Weekly', weekdays: '🔁 Weekdays' };
+  const dragEnabled = taskSortMode === 'manual' || (taskSortMode === 'default' && filter === 'all' && !taskSearchQuery.trim());
 
   tasks.forEach(task => {
     const card = document.createElement('div');
-    card.className = `task-card priority-${task.priority} ${task.done ? 'completed' : ''}`;
+    const isSelected = selectedTaskIds.has(task.id);
+    card.className = `task-card priority-${task.priority} ${task.done ? 'completed' : ''} ${bulkMode ? 'bulk-mode' : ''} ${isSelected ? 'selected' : ''}`;
     card.dataset.id = task.id;
+    if (dragEnabled && !bulkMode) card.draggable = true;
 
     const overdue = !task.done && isOverdue(task.date, task.time);
+    const subtasks = task.subtasks || [];
+    const subDone = subtasks.filter(s => s.done).length;
+    const tags = task.tags || [];
+
+    const subtasksHtml = subtasks.length > 0 ? `
+      <div class="task-subtasks">
+        <div class="subtask-progress-label">${subDone}/${subtasks.length} subtasks</div>
+        <div class="subtask-mini-list">
+          ${subtasks.map(s => `
+            <div class="subtask-mini-item ${s.done ? 'done' : ''}" data-task-id="${task.id}" data-sub-id="${s.id}">
+              <span class="subtask-mini-check">${s.done ? '☑' : '☐'}</span>
+              <span class="subtask-mini-text">${escapeHtml(s.text)}</span>
+            </div>
+          `).join('')}
+        </div>
+      </div>` : '';
+
+    const tagsHtml = tags.length > 0
+      ? `<div class="task-tags">${tags.map(tag => `<span class="tag-chip">#${escapeHtml(tag)}</span>`).join('')}</div>`
+      : '';
 
     card.innerHTML = `
-      <div class="task-checkbox ${task.done ? 'checked' : ''}" data-id="${task.id}" role="button" aria-label="Toggle task"></div>
+      ${dragEnabled && !bulkMode ? '<span class="drag-handle" title="Drag to reorder">⠿</span>' : ''}
+      <div class="task-checkbox ${task.done ? 'checked' : ''} ${isSelected ? 'is-selected' : ''}" data-id="${task.id}" role="button" aria-label="Toggle task"></div>
       <div class="task-body">
         <div class="task-title">${escapeHtml(task.title)}</div>
         ${task.desc ? `<div class="task-desc">${escapeHtml(task.desc)}</div>` : ''}
@@ -594,7 +979,11 @@ function renderTasks(filter = 'all') {
           ${task.category ? `<span class="task-badge badge-category">${catEmoji[task.category] || '📌'} ${capitalize(task.category)}</span>` : ''}
           ${task.date ? `<span class="task-badge ${overdue ? 'badge-overdue' : 'badge-date'}">${overdue ? '⚠️ Overdue' : '📅'} ${formatDate(task.date)}</span>` : ''}
           ${task.time ? `<span class="task-badge badge-date">⏰ ${formatTime12(task.time)}</span>` : ''}
+          ${task.recurrence && task.recurrence !== 'none' ? `<span class="task-badge badge-category">${recurIcon[task.recurrence]}</span>` : ''}
+          ${task.link ? `<a class="task-badge badge-link" href="${escapeHtml(task.link)}" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()">🔗 Link</a>` : ''}
         </div>
+        ${tagsHtml}
+        ${subtasksHtml}
       </div>
       <div class="task-actions">
         <button class="task-action-btn edit-task" data-id="${task.id}" title="Edit">✏️</button>
@@ -622,6 +1011,10 @@ function openTaskModal(taskId = null) {
     document.getElementById('task-date').value = task.date || '';
     document.getElementById('task-time').value = task.time || '';
     document.getElementById('task-reminder-check').checked = task.reminder || false;
+    document.getElementById('task-tags').value = (task.tags || []).join(', ');
+    document.getElementById('task-link').value = task.link || '';
+    document.getElementById('task-recurrence').value = task.recurrence || 'none';
+    modalSubtasks = (task.subtasks || []).map(s => ({ ...s }));
   } else {
     title.textContent = '📋 Add New Task';
     document.getElementById('task-title').value = '';
@@ -631,15 +1024,44 @@ function openTaskModal(taskId = null) {
     document.getElementById('task-date').value = today;
     document.getElementById('task-time').value = '';
     document.getElementById('task-reminder-check').checked = false;
+    document.getElementById('task-tags').value = '';
+    document.getElementById('task-link').value = '';
+    document.getElementById('task-recurrence').value = 'none';
+    modalSubtasks = [];
   }
 
+  renderSubtaskEditor();
   modal.classList.remove('hidden');
   setTimeout(() => document.getElementById('task-title').focus(), 300);
 }
 
+function renderSubtaskEditor() {
+  const container = document.getElementById('subtask-editor-list');
+  if (!container) return;
+  container.innerHTML = modalSubtasks.map(s => `
+    <div class="subtask-edit-row" data-sub-id="${s.id}">
+      <span class="subtask-edit-check ${s.done ? 'checked' : ''}" data-sub-id="${s.id}">${s.done ? '☑' : '☐'}</span>
+      <input type="text" class="subtask-edit-input" data-sub-id="${s.id}" value="${escapeHtml(s.text)}" maxlength="80" />
+      <button class="subtask-edit-remove" data-sub-id="${s.id}" title="Remove">✕</button>
+    </div>
+  `).join('');
+}
+
+function addSubtaskRow() {
+  const input = document.getElementById('subtask-new-input');
+  const text = input?.value.trim();
+  if (!text) return;
+  modalSubtasks.push({ id: generateId(), text, done: false });
+  input.value = '';
+  renderSubtaskEditor();
+}
+
 function saveTask() {
   const title = document.getElementById('task-title').value.trim();
-  if (!title) { showToast('⚠️', 'Task title dalna zaroori hai!'); return; }
+  if (!title) { showToast('⚠️', 'Task title is required!'); return; }
+
+  const tagsRaw = document.getElementById('task-tags').value.trim();
+  const tags = tagsRaw ? tagsRaw.split(',').map(s => s.trim()).filter(Boolean).slice(0, 10) : [];
 
   const taskData = {
     title,
@@ -649,6 +1071,10 @@ function saveTask() {
     date: document.getElementById('task-date').value,
     time: document.getElementById('task-time').value,
     reminder: document.getElementById('task-reminder-check').checked,
+    tags,
+    link: document.getElementById('task-link').value.trim(),
+    recurrence: document.getElementById('task-recurrence').value,
+    subtasks: modalSubtasks.map(s => ({ ...s })),
     done: false,
     createdAt: Date.now()
   };
@@ -658,13 +1084,15 @@ function saveTask() {
     if (idx !== -1) {
       taskData.done = state.tasks[idx].done;
       taskData.createdAt = state.tasks[idx].createdAt;
+      taskData.order = state.tasks[idx].order;
       state.tasks[idx] = { ...state.tasks[idx], ...taskData };
     }
     showToast('✅', 'Task updated!');
   } else {
     taskData.id = generateId();
+    taskData.order = state.tasks.length;
     state.tasks.unshift(taskData);
-    showToast('✅', 'Task add ho gaya!');
+    showToast('✅', 'Task added!');
     AudioEngine.playNotificationSound();
     VibrationEngine.successVibrate();
   }
@@ -680,29 +1108,170 @@ function toggleTask(id) {
   if (!task) return;
   task.done = !task.done;
   task.completedAt = task.done ? Date.now() : null;
+
+  if (task.done && task.recurrence && task.recurrence !== 'none' && task.date) {
+    let nextDate = task.date;
+    if (task.recurrence === 'daily') nextDate = addDaysToDateString(task.date, 1);
+    else if (task.recurrence === 'weekly') nextDate = addDaysToDateString(task.date, 7);
+    else if (task.recurrence === 'weekdays') {
+      nextDate = addDaysToDateString(task.date, 1);
+      let dow = new Date(nextDate + 'T00:00:00').getDay();
+      while (dow === 0 || dow === 6) {
+        nextDate = addDaysToDateString(nextDate, 1);
+        dow = new Date(nextDate + 'T00:00:00').getDay();
+      }
+    }
+    const clone = {
+      ...task,
+      id: generateId(),
+      date: nextDate,
+      done: false,
+      completedAt: null,
+      reminderFired: null,
+      createdAt: Date.now(),
+      subtasks: (task.subtasks || []).map(s => ({ ...s, done: false })),
+      order: state.tasks.length
+    };
+    state.tasks.push(clone);
+  }
+
   saveState();
   if (task.done) {
     AudioEngine.playChime(false);
     VibrationEngine.successVibrate();
-    showToast('🎉', 'Task complete! Shabash!');
+    showToast('🎉', 'Task complete! Well done!');
   }
   renderTasks(getCurrentFilter());
   updateStats();
+  renderInsights();
+}
+
+function toggleSubtaskDone(taskId, subId) {
+  const task = state.tasks.find(t => t.id === taskId);
+  if (!task) return;
+  const sub = (task.subtasks || []).find(s => s.id === subId);
+  if (!sub) return;
+  sub.done = !sub.done;
+  saveState();
+  renderTasks(getCurrentFilter());
 }
 
 function deleteTask(id) {
-  showConfirm('Is task ko delete karna chahte ho?', () => {
-    state.tasks = state.tasks.filter(t => t.id !== id);
+  showConfirm('Delete this task?', () => {
+    const idx = state.tasks.findIndex(t => t.id === id);
+    if (idx === -1) return;
+    const [removed] = state.tasks.splice(idx, 1);
+    lastDeleted = { type: 'tasks', item: removed, index: idx };
     saveState();
     renderTasks(getCurrentFilter());
     updateStats();
-    showToast('🗑️', 'Task delete ho gaya!');
+    showToast('🗑️', 'Task deleted', 5000, true);
   });
 }
 
 function getCurrentFilter() {
   const activeChip = document.querySelector('.chip.active');
   return activeChip ? activeChip.dataset.filter : 'all';
+}
+
+// =============================================
+// BULK ACTIONS
+// =============================================
+
+function toggleBulkMode() {
+  bulkMode = !bulkMode;
+  selectedTaskIds.clear();
+  const btn = document.getElementById('bulk-select-btn');
+  if (btn) btn.classList.toggle('active', bulkMode);
+  document.getElementById('bulk-toolbar')?.classList.toggle('hidden', !bulkMode);
+  renderTasks(getCurrentFilter());
+  updateBulkToolbar();
+}
+
+function toggleTaskSelection(id) {
+  if (selectedTaskIds.has(id)) selectedTaskIds.delete(id);
+  else selectedTaskIds.add(id);
+  renderTasks(getCurrentFilter());
+  updateBulkToolbar();
+}
+
+function updateBulkToolbar() {
+  const countEl = document.getElementById('bulk-count');
+  if (countEl) countEl.textContent = `${selectedTaskIds.size} selected`;
+}
+
+function bulkCompleteSelected() {
+  if (selectedTaskIds.size === 0) return;
+  state.tasks.forEach(t => {
+    if (selectedTaskIds.has(t.id) && !t.done) {
+      t.done = true;
+      t.completedAt = Date.now();
+    }
+  });
+  saveState();
+  showToast('✅', `${selectedTaskIds.size} task(s) completed!`);
+  toggleBulkMode();
+  updateStats();
+}
+
+function bulkDeleteSelected() {
+  if (selectedTaskIds.size === 0) return;
+  showConfirm(`Delete ${selectedTaskIds.size} selected task(s)?`, () => {
+    state.tasks = state.tasks.filter(t => !selectedTaskIds.has(t.id));
+    saveState();
+    showToast('🗑️', 'Selected tasks deleted');
+    toggleBulkMode();
+    updateStats();
+  });
+}
+
+// =============================================
+// DRAG & DROP REORDER
+// =============================================
+
+function handleTaskDragStart(e, id) {
+  draggedTaskId = id;
+  e.dataTransfer.effectAllowed = 'move';
+  e.target.closest('.task-card')?.classList.add('dragging');
+}
+
+function handleTaskDragOver(e) {
+  e.preventDefault();
+  e.dataTransfer.dropEffect = 'move';
+  const card = e.target.closest('.task-card');
+  if (card) card.classList.add('drag-over');
+}
+
+function handleTaskDragLeave(e) {
+  const card = e.target.closest('.task-card');
+  if (card) card.classList.remove('drag-over');
+}
+
+function handleTaskDrop(e, targetId) {
+  e.preventDefault();
+  document.querySelectorAll('.task-card').forEach(c => c.classList.remove('drag-over', 'dragging'));
+  if (!draggedTaskId || draggedTaskId === targetId) return;
+
+  const fromIdx = state.tasks.findIndex(t => t.id === draggedTaskId);
+  const toIdx = state.tasks.findIndex(t => t.id === targetId);
+  if (fromIdx === -1 || toIdx === -1) return;
+
+  const [moved] = state.tasks.splice(fromIdx, 1);
+  state.tasks.splice(toIdx, 0, moved);
+  state.tasks.forEach((t, i) => { t.order = i; });
+
+  taskSortMode = 'manual';
+  const sortSelect = document.getElementById('task-sort');
+  if (sortSelect) sortSelect.value = 'manual';
+
+  saveState();
+  renderTasks(getCurrentFilter());
+  draggedTaskId = null;
+}
+
+function handleTaskDragEnd() {
+  document.querySelectorAll('.task-card').forEach(c => c.classList.remove('drag-over', 'dragging'));
+  draggedTaskId = null;
 }
 
 // =============================================
@@ -723,70 +1292,143 @@ function renderAlarms() {
   }
   empty.style.display = 'none';
 
-  state.alarms.forEach(alarm => {
-    const card = document.createElement('div');
-    card.className = 'alarm-card';
-    card.dataset.id = alarm.id;
+  const sorted = [...state.alarms].sort((a, b) => a.time.localeCompare(b.time));
+  const dayLabels = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
 
-    const daysHtml = alarm.days.length > 0
-      ? alarm.days.map(d => `<span class="alarm-day-dot">${getDayName(d)}</span>`).join('')
-      : '<span class="alarm-day-dot">Once</span>';
+  // Group by alarm.group for section headers
+  const groups = {};
+  sorted.forEach(a => {
+    const g = a.group || 'General';
+    if (!groups[g]) groups[g] = [];
+    groups[g].push(a);
+  });
 
-    card.innerHTML = `
-      <div class="alarm-time-display">${formatTime12(alarm.time)}</div>
-      <div class="alarm-info">
-        <div class="alarm-label">${escapeHtml(alarm.label || 'Alarm')}</div>
-        <div class="alarm-days">${daysHtml}</div>
-      </div>
-      <div class="alarm-controls">
-        <label class="toggle-switch" title="Enable/Disable">
-          <input type="checkbox" class="alarm-toggle" data-id="${alarm.id}" ${alarm.active ? 'checked' : ''} />
-          <span class="toggle-slider"></span>
-        </label>
-        <button class="alarm-delete-btn" data-id="${alarm.id}" title="Delete">🗑️</button>
-      </div>
+  Object.keys(groups).forEach(groupName => {
+    const groupHeader = document.createElement('div');
+    groupHeader.className = 'alarm-group-header';
+    const groupAlarms = groups[groupName];
+    const allActive = groupAlarms.every(a => a.active);
+    groupHeader.innerHTML = `
+      <span>${groupName === 'General' ? '⏰ General' : `🏷️ ${escapeHtml(groupName)}`}</span>
+      <button class="group-toggle-btn" data-group="${escapeHtml(groupName)}" data-state="${allActive ? 'on' : 'off'}">
+        ${allActive ? 'Turn all off' : 'Turn all on'}
+      </button>
     `;
-    list.appendChild(card);
+    list.appendChild(groupHeader);
+
+    groupAlarms.forEach(alarm => {
+      const card = document.createElement('div');
+      card.className = `alarm-card ${!alarm.active ? 'inactive' : ''}`;
+      card.dataset.id = alarm.id;
+
+      const daysHtml = alarm.days.length === 0
+        ? '<span class="alarm-days-label">One time</span>'
+        : alarm.days.length === 7
+          ? '<span class="alarm-days-label">Every day</span>'
+          : `<span class="alarm-days-label">${alarm.days.map(d => dayLabels[d]).join(' ')}</span>`;
+
+      card.innerHTML = `
+        <div class="alarm-time-block">
+          <div class="alarm-time">${formatTime12(alarm.time)}</div>
+          <div class="alarm-label">${escapeHtml(alarm.label || 'Alarm')} ${alarm.customSound ? '🎵' : ''}</div>
+          ${daysHtml}
+        </div>
+        <div class="alarm-controls">
+          <label class="toggle-switch">
+            <input type="checkbox" class="alarm-toggle" data-id="${alarm.id}" ${alarm.active ? 'checked' : ''}>
+            <span class="toggle-slider"></span>
+          </label>
+          <button class="task-action-btn edit-alarm" data-id="${alarm.id}" title="Edit">✏️</button>
+          <button class="task-action-btn delete delete-alarm" data-id="${alarm.id}" title="Delete">🗑️</button>
+        </div>
+      `;
+      list.appendChild(card);
+    });
   });
 }
 
 function openAlarmModal(alarmId = null) {
   editingAlarmId = alarmId;
-  selectedDays = [];
   const modal = document.getElementById('alarm-modal');
   const title = document.getElementById('alarm-modal-title');
-
-  // Reset day buttons
-  document.querySelectorAll('.day-btn').forEach(btn => btn.classList.remove('selected'));
+  selectedDays = [];
+  pendingCustomSound = null;
+  document.getElementById('custom-sound-name').textContent = 'No custom sound';
+  document.getElementById('clear-custom-sound-btn')?.classList.add('hidden');
 
   if (alarmId) {
     const alarm = state.alarms.find(a => a.id === alarmId);
     if (!alarm) return;
     title.textContent = '✏️ Edit Alarm';
     document.getElementById('alarm-label').value = alarm.label || '';
-    document.getElementById('alarm-time').value = alarm.time || '';
+    document.getElementById('alarm-time').value = alarm.time;
     document.getElementById('alarm-sound').value = alarm.sound || 'bell';
     document.getElementById('alarm-vibrate').checked = alarm.vibrate !== false;
-    selectedDays = [...(alarm.days || [])];
-    selectedDays.forEach(d => {
-      const btn = document.querySelector(`.day-btn[data-day="${d}"]`);
-      if (btn) btn.classList.add('selected');
-    });
+    document.getElementById('alarm-group').value = alarm.group || '';
+    selectedDays = [...alarm.days];
+    if (alarm.customSound) {
+      pendingCustomSound = { dataUrl: alarm.customSound, name: alarm.customSoundName || 'Custom sound' };
+      document.getElementById('custom-sound-name').textContent = `🎵 ${alarm.customSoundName || 'Custom sound'}`;
+      document.getElementById('clear-custom-sound-btn')?.classList.remove('hidden');
+    }
   } else {
-    title.textContent = '⏰ Add New Alarm';
+    title.textContent = '⏰ New Alarm';
     document.getElementById('alarm-label').value = '';
-    const now = new Date();
-    document.getElementById('alarm-time').value = `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`;
+    document.getElementById('alarm-time').value = '';
     document.getElementById('alarm-sound').value = 'bell';
+    document.getElementById('alarm-group').value = '';
     document.getElementById('alarm-vibrate').checked = true;
   }
 
+  renderDayPicker();
   modal.classList.remove('hidden');
+}
+
+function renderDayPicker() {
+  document.querySelectorAll('.day-btn').forEach(btn => {
+    const day = parseInt(btn.dataset.day, 10);
+    btn.classList.toggle('selected', selectedDays.includes(day));
+  });
+}
+
+function toggleDaySelection(day) {
+  const idx = selectedDays.indexOf(day);
+  if (idx === -1) selectedDays.push(day);
+  else selectedDays.splice(idx, 1);
+  renderDayPicker();
+}
+
+function handleCustomSoundUpload(file) {
+  if (!file) return;
+  if (!file.type.startsWith('audio/')) {
+    showToast('❌', 'Please choose an audio file');
+    return;
+  }
+  if (file.size > 400 * 1024) {
+    showToast('⚠️', 'Sound file too large — please pick one under 400 KB');
+    return;
+  }
+  const reader = new FileReader();
+  reader.onload = () => {
+    pendingCustomSound = { dataUrl: reader.result, name: file.name };
+    document.getElementById('custom-sound-name').textContent = `🎵 ${file.name}`;
+    document.getElementById('clear-custom-sound-btn')?.classList.remove('hidden');
+    showToast('✅', 'Custom sound ready!');
+  };
+  reader.readAsDataURL(file);
+}
+
+function clearCustomSound() {
+  pendingCustomSound = null;
+  document.getElementById('custom-sound-name').textContent = 'No custom sound';
+  document.getElementById('clear-custom-sound-btn')?.classList.add('hidden');
+  const fileInput = document.getElementById('alarm-sound-upload');
+  if (fileInput) fileInput.value = '';
 }
 
 function saveAlarm() {
   const time = document.getElementById('alarm-time').value;
-  if (!time) { showToast('⚠️', 'Alarm time dalna zaroori hai!'); return; }
+  if (!time) { showToast('⚠️', 'Alarm time is required!'); return; }
 
   const alarmData = {
     label: document.getElementById('alarm-label').value.trim() || 'Alarm',
@@ -794,20 +1436,23 @@ function saveAlarm() {
     days: [...selectedDays],
     sound: document.getElementById('alarm-sound').value,
     vibrate: document.getElementById('alarm-vibrate').checked,
-    active: true,
-    createdAt: Date.now()
+    group: document.getElementById('alarm-group').value.trim(),
+    customSound: pendingCustomSound ? pendingCustomSound.dataUrl : null,
+    customSoundName: pendingCustomSound ? pendingCustomSound.name : '',
+    active: true
   };
 
   if (editingAlarmId) {
     const idx = state.alarms.findIndex(a => a.id === editingAlarmId);
-    if (idx !== -1) state.alarms[idx] = { ...state.alarms[idx], ...alarmData };
+    if (idx !== -1) {
+      alarmData.active = state.alarms[idx].active;
+      state.alarms[idx] = { ...state.alarms[idx], ...alarmData };
+    }
     showToast('✅', 'Alarm updated!');
   } else {
     alarmData.id = generateId();
-    state.alarms.unshift(alarmData);
+    state.alarms.push(alarmData);
     showToast('⏰', `Alarm set for ${formatTime12(time)}!`);
-    AudioEngine.playBell(false);
-    VibrationEngine.successVibrate();
   }
 
   saveState();
@@ -825,13 +1470,26 @@ function toggleAlarm(id, active) {
   showToast(active ? '⏰' : '🔕', active ? `Alarm on: ${formatTime12(alarm.time)}` : 'Alarm off');
 }
 
+function toggleAlarmGroup(groupName, turnOn) {
+  state.alarms.forEach(a => {
+    if ((a.group || 'General') === groupName) a.active = turnOn;
+  });
+  saveState();
+  renderAlarms();
+  updateStats();
+  showToast(turnOn ? '⏰' : '🔕', `${groupName}: all alarms ${turnOn ? 'on' : 'off'}`);
+}
+
 function deleteAlarm(id) {
-  showConfirm('Is alarm ko delete karna chahte ho?', () => {
-    state.alarms = state.alarms.filter(a => a.id !== id);
+  showConfirm('Delete this alarm?', () => {
+    const idx = state.alarms.findIndex(a => a.id === id);
+    if (idx === -1) return;
+    const [removed] = state.alarms.splice(idx, 1);
+    lastDeleted = { type: 'alarms', item: removed, index: idx };
     saveState();
     renderAlarms();
     updateStats();
-    showToast('🗑️', 'Alarm delete ho gaya!');
+    showToast('🗑️', 'Alarm deleted', 5000, true);
   });
 }
 
@@ -853,26 +1511,32 @@ function renderReminders() {
   }
   empty.style.display = 'none';
 
+  const repeatLabels = { once: 'Once', daily: 'Daily', weekly: 'Weekly', weekdays: 'Weekdays' };
+
   state.reminders.forEach(reminder => {
     const card = document.createElement('div');
-    card.className = 'reminder-card';
+    card.className = `reminder-card ${!reminder.active ? 'inactive' : ''}`;
     card.dataset.id = reminder.id;
 
-    const repeatLabels = { once: 'Once', daily: '🔁 Daily', weekly: '📅 Weekly', weekdays: '💼 Weekdays' };
-
     card.innerHTML = `
-      <div class="reminder-icon-wrap">🔔</div>
+      <div class="reminder-icon">🔔</div>
       <div class="reminder-body">
         <div class="reminder-title">${escapeHtml(reminder.title)}</div>
         ${reminder.message ? `<div class="reminder-msg">${escapeHtml(reminder.message)}</div>` : ''}
         <div class="reminder-meta">
-          ${reminder.time ? `<span class="task-badge badge-date">⏰ ${formatTime12(reminder.time)}</span>` : ''}
-          ${reminder.date ? `<span class="task-badge badge-date">📅 ${formatDate(reminder.date)}</span>` : ''}
-          <span class="task-badge badge-category">${repeatLabels[reminder.repeat] || 'Once'}</span>
-          ${!reminder.active ? '<span class="task-badge" style="background:rgba(239,68,68,0.15);color:#ef4444">Inactive</span>' : ''}
+          <span class="task-badge badge-date">⏰ ${formatTime12(reminder.time)}</span>
+          <span class="task-badge badge-category">🔁 ${repeatLabels[reminder.repeat] || 'Once'}</span>
+          ${reminder.locationEnabled ? `<span class="task-badge badge-category">📍 ${escapeHtml(reminder.locationLabel || 'Location')}</span>` : ''}
         </div>
       </div>
-      <button class="reminder-delete-btn" data-id="${reminder.id}" title="Delete">🗑️</button>
+      <div class="reminder-controls">
+        <label class="toggle-switch">
+          <input type="checkbox" class="reminder-toggle" data-id="${reminder.id}" ${reminder.active ? 'checked' : ''}>
+          <span class="toggle-slider"></span>
+        </label>
+        <button class="task-action-btn edit-reminder" data-id="${reminder.id}" title="Edit">✏️</button>
+        <button class="task-action-btn delete delete-reminder" data-id="${reminder.id}" title="Delete">🗑️</button>
+      </div>
     `;
     list.appendChild(card);
   });
@@ -882,6 +1546,7 @@ function openReminderModal(reminderId = null) {
   editingReminderId = reminderId;
   const modal = document.getElementById('reminder-modal');
   const title = document.getElementById('reminder-modal-title');
+  document.getElementById('reminder-location-fields')?.classList.add('hidden');
 
   if (reminderId) {
     const reminder = state.reminders.find(r => r.id === reminderId);
@@ -889,75 +1554,420 @@ function openReminderModal(reminderId = null) {
     title.textContent = '✏️ Edit Reminder';
     document.getElementById('reminder-title').value = reminder.title || '';
     document.getElementById('reminder-msg').value = reminder.message || '';
-    document.getElementById('reminder-date').value = reminder.date || '';
     document.getElementById('reminder-time').value = reminder.time || '';
     document.getElementById('reminder-repeat').value = reminder.repeat || 'once';
+    document.getElementById('reminder-date').value = reminder.date || '';
+    document.getElementById('reminder-location-check').checked = reminder.locationEnabled || false;
+    document.getElementById('reminder-location-label').value = reminder.locationLabel || '';
+    document.getElementById('reminder-location-radius').value = reminder.locationRadius || 300;
+    document.getElementById('reminder-location-fields')?.classList.toggle('hidden', !reminder.locationEnabled);
+    modal.dataset.lat = reminder.locationLat != null ? reminder.locationLat : '';
+    modal.dataset.lng = reminder.locationLng != null ? reminder.locationLng : '';
+    updateLocationStatusLabel();
   } else {
-    title.textContent = '🔔 Add Reminder';
+    title.textContent = '🔔 New Reminder';
     document.getElementById('reminder-title').value = '';
     document.getElementById('reminder-msg').value = '';
-    document.getElementById('reminder-date').value = getTodayDateString();
     document.getElementById('reminder-time').value = '';
     document.getElementById('reminder-repeat').value = 'once';
+    document.getElementById('reminder-date').value = getTodayDateString();
+    document.getElementById('reminder-location-check').checked = false;
+    document.getElementById('reminder-location-label').value = '';
+    document.getElementById('reminder-location-radius').value = 300;
+    modal.dataset.lat = '';
+    modal.dataset.lng = '';
+    updateLocationStatusLabel();
   }
 
   modal.classList.remove('hidden');
+  const radiusInputEl = document.getElementById('reminder-location-radius');
+  const radiusLabelEl = document.getElementById('radius-value');
+  if (radiusInputEl && radiusLabelEl) radiusLabelEl.textContent = `${radiusInputEl.value} m`;
   setTimeout(() => document.getElementById('reminder-title').focus(), 300);
+}
+
+function updateLocationStatusLabel() {
+  const modal = document.getElementById('reminder-modal');
+  const statusEl = document.getElementById('location-status');
+  if (!statusEl || !modal) return;
+  const lat = modal.dataset.lat, lng = modal.dataset.lng;
+  statusEl.textContent = (lat && lng) ? `📍 Location captured (${parseFloat(lat).toFixed(3)}, ${parseFloat(lng).toFixed(3)})` : 'No location set yet';
+}
+
+function captureCurrentLocation() {
+  if (!('geolocation' in navigator)) {
+    showToast('❌', 'Location is not supported on this device');
+    return;
+  }
+  showToast('📍', 'Getting your location...');
+  navigator.geolocation.getCurrentPosition(
+    (pos) => {
+      const modal = document.getElementById('reminder-modal');
+      modal.dataset.lat = pos.coords.latitude;
+      modal.dataset.lng = pos.coords.longitude;
+      updateLocationStatusLabel();
+      showToast('✅', 'Location captured!');
+    },
+    () => showToast('❌', 'Could not get location — check permissions'),
+    { enableHighAccuracy: true, timeout: 10000 }
+  );
 }
 
 function saveReminder() {
   const title = document.getElementById('reminder-title').value.trim();
   const time = document.getElementById('reminder-time').value;
-  if (!title) { showToast('⚠️', 'Reminder title dalna zaroori hai!'); return; }
-  if (!time) { showToast('⚠️', 'Reminder time dalna zaroori hai!'); return; }
+  if (!title) { showToast('⚠️', 'Reminder title is required!'); return; }
+  if (!time) { showToast('⚠️', 'Reminder time is required!'); return; }
+
+  const modal = document.getElementById('reminder-modal');
+  const locationEnabled = document.getElementById('reminder-location-check').checked;
+  const lat = modal.dataset.lat ? parseFloat(modal.dataset.lat) : null;
+  const lng = modal.dataset.lng ? parseFloat(modal.dataset.lng) : null;
+
+  if (locationEnabled && (lat == null || lng == null)) {
+    showToast('⚠️', 'Please capture a location first');
+    return;
+  }
 
   const reminderData = {
     title,
     message: document.getElementById('reminder-msg').value.trim(),
-    date: document.getElementById('reminder-date').value,
     time,
     repeat: document.getElementById('reminder-repeat').value,
-    active: true,
-    createdAt: Date.now()
+    date: document.getElementById('reminder-date').value || getTodayDateString(),
+    locationEnabled,
+    locationLat: locationEnabled ? lat : null,
+    locationLng: locationEnabled ? lng : null,
+    locationRadius: parseInt(document.getElementById('reminder-location-radius').value, 10) || 300,
+    locationLabel: document.getElementById('reminder-location-label').value.trim(),
+    active: true
   };
 
   if (editingReminderId) {
     const idx = state.reminders.findIndex(r => r.id === editingReminderId);
-    if (idx !== -1) state.reminders[idx] = { ...state.reminders[idx], ...reminderData };
+    if (idx !== -1) {
+      reminderData.active = state.reminders[idx].active;
+      state.reminders[idx] = { ...state.reminders[idx], ...reminderData };
+    }
     showToast('✅', 'Reminder updated!');
   } else {
     reminderData.id = generateId();
-    state.reminders.unshift(reminderData);
-    showToast('🔔', 'Reminder set ho gaya!');
-    AudioEngine.playNotificationSound();
-    VibrationEngine.successVibrate();
+    state.reminders.push(reminderData);
+    showToast('🔔', 'Reminder set!');
   }
 
   saveState();
   closeModal('reminder-modal');
   renderReminders();
+  LocationReminders.start();
+}
+
+function toggleReminder(id, active) {
+  const reminder = state.reminders.find(r => r.id === id);
+  if (!reminder) return;
+  reminder.active = active;
+  saveState();
+  renderReminders();
+  LocationReminders.start();
 }
 
 function deleteReminder(id) {
-  showConfirm('Is reminder ko delete karna chahte ho?', () => {
-    state.reminders = state.reminders.filter(r => r.id !== id);
+  showConfirm('Delete this reminder?', () => {
+    const idx = state.reminders.findIndex(r => r.id === id);
+    if (idx === -1) return;
+    const [removed] = state.reminders.splice(idx, 1);
+    lastDeleted = { type: 'reminders', item: removed, index: idx };
     saveState();
     renderReminders();
-    showToast('🗑️', 'Reminder delete ho gaya!');
+    LocationReminders.start();
+    showToast('🗑️', 'Reminder deleted', 5000, true);
   });
+}
+
+// =============================================
+// CALENDAR
+// =============================================
+
+function getItemsForDate(dateStr) {
+  const tasks = state.tasks.filter(t => t.date === dateStr);
+  const alarms = state.alarms.filter(a => {
+    if (!a.active) return false;
+    if (a.days.length === 0) return false; // one-time alarms aren't date-bound
+    const dow = new Date(dateStr + 'T00:00:00').getDay();
+    return a.days.includes(dow);
+  });
+  const reminders = state.reminders.filter(r => r.active && (r.date === dateStr || r.repeat === 'daily' ||
+    (r.repeat === 'weekdays' && ![0,6].includes(new Date(dateStr + 'T00:00:00').getDay()))));
+  return { tasks, alarms, reminders };
+}
+
+function renderCalendar() {
+  if (calendarMode === 'month') renderCalendarMonth();
+  else renderCalendarWeek();
+  renderAgendaForSelectedDate();
+}
+
+function renderCalendarMonth() {
+  const grid = document.getElementById('calendar-grid');
+  const label = document.getElementById('calendar-month-label');
+  if (!grid || !label) return;
+
+  const year = calendarViewDate.getFullYear();
+  const month = calendarViewDate.getMonth();
+  label.textContent = calendarViewDate.toLocaleDateString('en-IN', { month: 'long', year: 'numeric' });
+
+  const firstDay = new Date(year, month, 1);
+  const startOffset = firstDay.getDay();
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const today = getTodayDateString();
+
+  let html = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].map(d => `<div class="cal-weekday">${d}</div>`).join('');
+
+  for (let i = 0; i < startOffset; i++) html += `<div class="cal-day empty"></div>`;
+
+  for (let day = 1; day <= daysInMonth; day++) {
+    const dateStr = `${year}-${String(month+1).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
+    const { tasks, alarms, reminders } = getItemsForDate(dateStr);
+    const hasItems = tasks.length + alarms.length + reminders.length > 0;
+    const isToday = dateStr === today;
+    const isSelected = dateStr === calendarSelectedDate;
+
+    html += `
+      <div class="cal-day ${isToday ? 'today' : ''} ${isSelected ? 'selected' : ''}" data-date="${dateStr}">
+        <span class="cal-day-num">${day}</span>
+        ${hasItems ? `<div class="cal-dots">
+          ${tasks.length ? '<span class="cal-dot dot-task"></span>' : ''}
+          ${alarms.length ? '<span class="cal-dot dot-alarm"></span>' : ''}
+          ${reminders.length ? '<span class="cal-dot dot-reminder"></span>' : ''}
+        </div>` : ''}
+      </div>
+    `;
+  }
+
+  grid.innerHTML = html;
+}
+
+function renderCalendarWeek() {
+  const grid = document.getElementById('calendar-grid');
+  const label = document.getElementById('calendar-month-label');
+  if (!grid || !label) return;
+
+  const base = calendarSelectedDate ? new Date(calendarSelectedDate + 'T00:00:00') : new Date();
+  const startOfWeek = new Date(base);
+  startOfWeek.setDate(base.getDate() - base.getDay());
+
+  const today = getTodayDateString();
+  let html = '';
+  const weekDates = [];
+
+  for (let i = 0; i < 7; i++) {
+    const d = new Date(startOfWeek);
+    d.setDate(startOfWeek.getDate() + i);
+    const dateStr = dateStringFromDate(d);
+    weekDates.push(dateStr);
+    const { tasks, alarms, reminders } = getItemsForDate(dateStr);
+    const hasItems = tasks.length + alarms.length + reminders.length > 0;
+    const isToday = dateStr === today;
+    const isSelected = dateStr === calendarSelectedDate;
+
+    html += `
+      <div class="cal-weekday">${getDayName(d.getDay())}</div>
+    `;
+  }
+  for (let i = 0; i < 7; i++) {
+    const dateStr = weekDates[i];
+    const { tasks, alarms, reminders } = getItemsForDate(dateStr);
+    const hasItems = tasks.length + alarms.length + reminders.length > 0;
+    const isToday = dateStr === today;
+    const isSelected = dateStr === calendarSelectedDate;
+    const d = new Date(dateStr + 'T00:00:00');
+    html += `
+      <div class="cal-day week-mode ${isToday ? 'today' : ''} ${isSelected ? 'selected' : ''}" data-date="${dateStr}">
+        <span class="cal-day-num">${d.getDate()}</span>
+        ${hasItems ? `<div class="cal-dots">
+          ${tasks.length ? '<span class="cal-dot dot-task"></span>' : ''}
+          ${alarms.length ? '<span class="cal-dot dot-alarm"></span>' : ''}
+          ${reminders.length ? '<span class="cal-dot dot-reminder"></span>' : ''}
+        </div>` : ''}
+      </div>
+    `;
+  }
+
+  label.textContent = `${formatDate(weekDates[0])} – ${formatDate(weekDates[6])}`;
+  grid.innerHTML = html;
+  grid.classList.toggle('week-grid', true);
+}
+
+function renderAgendaForSelectedDate() {
+  const dateStr = calendarSelectedDate || getTodayDateString();
+  const agendaTitle = document.getElementById('agenda-date-label');
+  const agendaList = document.getElementById('agenda-list');
+  if (!agendaList) return;
+
+  const isToday = dateStr === getTodayDateString();
+  if (agendaTitle) agendaTitle.textContent = isToday ? `Today · ${formatDate(dateStr)}` : formatDate(dateStr);
+
+  const { tasks, alarms, reminders } = getItemsForDate(dateStr);
+
+  const items = [
+    ...alarms.map(a => ({ time: a.time, icon: '⏰', label: a.label || 'Alarm', type: 'alarm' })),
+    ...reminders.map(r => ({ time: r.time, icon: '🔔', label: r.title, type: 'reminder' })),
+    ...tasks.map(t => ({ time: t.time || '00:00', icon: t.done ? '✅' : '📋', label: t.title, type: 'task', done: t.done }))
+  ].sort((a, b) => (a.time || '').localeCompare(b.time || ''));
+
+  if (items.length === 0) {
+    agendaList.innerHTML = `<div class="agenda-empty">Nothing scheduled for this day. 🎉</div>`;
+    return;
+  }
+
+  agendaList.innerHTML = items.map(item => `
+    <div class="agenda-item ${item.done ? 'done' : ''}">
+      <span class="agenda-time">${item.time && item.time !== '00:00' ? formatTime12(item.time) : 'All day'}</span>
+      <span class="agenda-icon">${item.icon}</span>
+      <span class="agenda-label">${escapeHtml(item.label)}</span>
+    </div>
+  `).join('');
+}
+
+function calendarNavigate(direction) {
+  if (calendarMode === 'month') {
+    calendarViewDate.setMonth(calendarViewDate.getMonth() + direction);
+  } else {
+    const base = calendarSelectedDate ? new Date(calendarSelectedDate + 'T00:00:00') : new Date();
+    base.setDate(base.getDate() + direction * 7);
+    calendarSelectedDate = dateStringFromDate(base);
+  }
+  renderCalendar();
+}
+
+function selectCalendarDate(dateStr) {
+  calendarSelectedDate = dateStr;
+  renderCalendar();
+}
+
+function setCalendarMode(mode) {
+  calendarMode = mode;
+  document.querySelectorAll('.cal-mode-btn').forEach(b => b.classList.toggle('active', b.dataset.mode === mode));
+  document.getElementById('calendar-grid')?.classList.toggle('week-grid', mode === 'week');
+  renderCalendar();
+}
+
+// =============================================
+// INSIGHTS
+// =============================================
+
+function renderInsights() {
+  const streak = getCurrentStreak();
+  const streakEl = document.getElementById('insight-streak');
+  if (streakEl) streakEl.textContent = `${streak} day${streak === 1 ? '' : 's'}`;
+
+  const totalDone = state.tasks.filter(t => t.done).length;
+  const doneEl = document.getElementById('insight-total-done');
+  if (doneEl) doneEl.textContent = totalDone;
+
+  const weekData = getLast7DaysCompletionCounts();
+  const maxCount = Math.max(1, ...weekData.map(d => d.count));
+  const chart = document.getElementById('week-chart');
+  if (chart) {
+    chart.innerHTML = weekData.map(d => `
+      <div class="week-bar-col">
+        <div class="week-bar-track">
+          <div class="week-bar-fill" style="height:${(d.count / maxCount) * 100}%" title="${d.count} completed"></div>
+        </div>
+        <span class="week-bar-label">${d.label}</span>
+        <span class="week-bar-count">${d.count}</span>
+      </div>
+    `).join('');
+  }
+
+  const categories = getCategoryBreakdown();
+  const catList = document.getElementById('category-breakdown');
+  if (catList) {
+    if (categories.length === 0) {
+      catList.innerHTML = `<div class="agenda-empty">Add some tasks to see a breakdown.</div>`;
+    } else {
+      catList.innerHTML = categories.map(c => `
+        <div class="category-row">
+          <span class="category-label">${c.emoji} ${capitalize(c.cat)}</span>
+          <div class="category-bar-track">
+            <div class="category-bar-fill" style="width:${c.percent}%"></div>
+          </div>
+          <span class="category-percent">${c.percent}%</span>
+        </div>
+      `).join('');
+    }
+  }
+}
+
+// =============================================
+// SETTINGS
+// =============================================
+
+function renderSettings() {
+  document.getElementById('settings-language').value = state.settings.language || 'en';
+  document.getElementById('settings-accent').querySelectorAll('.accent-swatch').forEach(sw => {
+    sw.classList.toggle('active', sw.dataset.color === (state.settings.accentColor || 'purple'));
+  });
+  document.getElementById('settings-snooze').value = state.settings.snoozeMinutes || 5;
+  document.getElementById('settings-pin-toggle').checked = state.settings.pinEnabled || false;
+  document.getElementById('pin-setup-fields')?.classList.toggle('hidden', !state.settings.pinEnabled);
+}
+
+function setLanguage(lang) {
+  state.settings.language = lang;
+  saveState();
+  applyTranslations();
+  renderTasks(getCurrentFilter());
+  renderAlarms();
+  renderReminders();
+}
+
+function setAccentColor(color) {
+  state.settings.accentColor = color;
+  applyAccentColor(color);
+  saveState();
+  document.querySelectorAll('.accent-swatch').forEach(sw => {
+    sw.classList.toggle('active', sw.dataset.color === color);
+  });
+  showToast('🎨', 'Theme color updated!');
+}
+
+function setSnoozeMinutes(mins) {
+  state.settings.snoozeMinutes = parseInt(mins, 10) || 5;
+  saveState();
+}
+
+function enablePinLock(pin) {
+  state.settings.pinEnabled = true;
+  state.settings.pinCode = pin;
+  sessionUnlocked = true;
+  saveState();
+  showToast('🔒', 'App lock enabled!');
+}
+
+function disablePinLock() {
+  state.settings.pinEnabled = false;
+  state.settings.pinCode = '';
+  saveState();
+  document.getElementById('settings-pin-toggle').checked = false;
+  document.getElementById('pin-setup-fields')?.classList.add('hidden');
+  showToast('🔓', 'App lock disabled');
 }
 
 // =============================================
 // MODAL MANAGEMENT
 // =============================================
 
-function closeModal(modalId) {
-  const modal = document.getElementById(modalId);
-  if (modal) modal.classList.add('hidden');
+function closeModal(id) {
+  document.getElementById(id)?.classList.add('hidden');
+}
+
+function closeAllModals() {
+  document.querySelectorAll('.modal-overlay').forEach(m => m.classList.add('hidden'));
 }
 
 // =============================================
-// TAB NAVIGATION
+// TABS
 // =============================================
 
 function switchTab(tabName) {
@@ -967,42 +1977,36 @@ function switchTab(tabName) {
   document.querySelectorAll('.tab-panel').forEach(panel => {
     panel.classList.toggle('active', panel.id === `tab-${tabName}`);
   });
+
+  if (tabName === 'calendar') renderCalendar();
+  if (tabName === 'insights') renderInsights();
+  if (tabName === 'settings') renderSettings();
 }
 
 // =============================================
-// FAB MENU
+// FAB (FLOATING ACTION BUTTON)
 // =============================================
 
 function toggleFabMenu() {
-  const fab = document.getElementById('fab-btn');
-  const menu = document.getElementById('fab-menu');
-  const overlay = document.getElementById('fab-overlay');
-  const isOpen = !menu.classList.contains('hidden');
-
-  if (isOpen) {
-    menu.classList.add('hidden');
-    overlay.classList.add('hidden');
-    fab.classList.remove('open');
-  } else {
-    menu.classList.remove('hidden');
-    overlay.classList.remove('hidden');
-    fab.classList.add('open');
-  }
+  document.getElementById('fab-menu')?.classList.toggle('hidden');
+  document.getElementById('fab-overlay')?.classList.toggle('hidden');
+  document.getElementById('fab-btn')?.classList.toggle('active');
 }
 
 function closeFabMenu() {
   document.getElementById('fab-menu')?.classList.add('hidden');
   document.getElementById('fab-overlay')?.classList.add('hidden');
-  document.getElementById('fab-btn')?.classList.remove('open');
+  document.getElementById('fab-btn')?.classList.remove('active');
 }
 
 // =============================================
 // HELPER FUNCTIONS
 // =============================================
 
-function escapeHtml(text) {
+function escapeHtml(str) {
+  if (!str) return '';
   const div = document.createElement('div');
-  div.appendChild(document.createTextNode(text || ''));
+  div.textContent = str;
   return div.innerHTML;
 }
 
@@ -1011,7 +2015,92 @@ function capitalize(str) {
 }
 
 // =============================================
-// SERVICE WORKER REGISTRATION
+// EXPORT / IMPORT (BACKUP & RESTORE)
+// =============================================
+
+function exportData() {
+  try {
+    const dataStr = JSON.stringify(state, null, 2);
+    const blob = new Blob([dataStr], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    const dateStamp = getTodayDateString();
+    a.href = url;
+    a.download = `pareshaan-backup-${dateStamp}.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    state.settings.lastBackupPrompt = Date.now();
+    saveState();
+    showToast('📤', 'Backup exported!');
+  } catch (e) {
+    console.warn('Export error:', e);
+    showToast('❌', 'Could not export backup');
+  }
+}
+
+function importData(e) {
+  const file = e.target.files && e.target.files[0];
+  if (!file) return;
+
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      const parsed = JSON.parse(reader.result);
+      if (!parsed || typeof parsed !== 'object') throw new Error('Invalid file');
+
+      showConfirm('Importing will replace your current data. Continue?', () => {
+        state = loadStateFromObject(parsed);
+        saveState();
+        applyTheme(state.settings.theme);
+        applyAccentColor(state.settings.accentColor);
+        applyTranslations();
+        initDailyReminderUI();
+        renderTasks();
+        renderAlarms();
+        renderReminders();
+        updateStats();
+        renderInsights();
+        LocationReminders.start();
+        showToast('📥', 'Backup imported!');
+      });
+    } catch (err) {
+      console.warn('Import error:', err);
+      showToast('❌', 'Invalid backup file');
+    } finally {
+      e.target.value = '';
+    }
+  };
+  reader.readAsText(file);
+}
+
+function loadStateFromObject(parsed) {
+  const merged = { ...defaultState, ...parsed, settings: { ...defaultState.settings, ...(parsed.settings || {}) } };
+  merged.tasks = (merged.tasks || []).map((task, i) => ({ subtasks: [], tags: [], link: '', recurrence: 'none', order: i, ...task }));
+  merged.alarms = (merged.alarms || []).map(alarm => ({ group: '', customSound: null, customSoundName: '', ...alarm }));
+  merged.reminders = (merged.reminders || []).map(reminder => ({ locationEnabled: false, locationLat: null, locationLng: null, locationRadius: 300, locationLabel: '', ...reminder }));
+  return merged;
+}
+
+// =============================================
+// AUTO-BACKUP REMINDER
+// =============================================
+
+function checkBackupReminder() {
+  const last = state.settings.lastBackupPrompt || 0;
+  const weekMs = 7 * 24 * 60 * 60 * 1000;
+  if (Date.now() - last > weekMs && (state.tasks.length > 0 || state.alarms.length > 0)) {
+    setTimeout(() => {
+      showToast('💾', 'It\'s been a while — consider exporting a backup from Settings.', 6000);
+      state.settings.lastBackupPrompt = Date.now();
+      saveState();
+    }, 4000);
+  }
+}
+
+// =============================================
+// SERVICE WORKER
 // =============================================
 
 async function registerServiceWorker() {
@@ -1020,7 +2109,22 @@ async function registerServiceWorker() {
       const reg = await navigator.serviceWorker.register('./sw.js', { scope: './' });
       console.log('SW registered:', reg.scope);
 
-      // Try periodic background sync
+      if (reg.waiting) {
+        newServiceWorker = reg.waiting;
+        showUpdateBanner();
+      }
+
+      reg.addEventListener('updatefound', () => {
+        const installing = reg.installing;
+        if (!installing) return;
+        installing.addEventListener('statechange', () => {
+          if (installing.state === 'installed' && navigator.serviceWorker.controller) {
+            newServiceWorker = installing;
+            showUpdateBanner();
+          }
+        });
+      });
+
       if ('periodicSync' in reg) {
         try {
           await reg.periodicSync.register('daily-reminder', { minInterval: 24 * 60 * 60 * 1000 });
@@ -1029,28 +2133,54 @@ async function registerServiceWorker() {
     } catch (e) {
       console.warn('SW registration failed:', e);
     }
+
+    let refreshing = false;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (refreshing) return;
+      refreshing = true;
+      window.location.reload();
+    });
   }
+}
+
+function showUpdateBanner() {
+  const banner = document.getElementById('update-banner');
+  if (banner) banner.classList.remove('hidden');
+}
+
+// =============================================
+// DAILY REMINDER UI
+// =============================================
+
+function initDailyReminderUI() {
+  const toggle = document.getElementById('daily-reminder-toggle');
+  const timeInput = document.getElementById('daily-reminder-time');
+  if (toggle) toggle.checked = state.settings.dailyReminder;
+  if (timeInput) timeInput.value = state.settings.dailyReminderTime || '08:00';
+  if (state.settings.dailyReminder) scheduleDailyReminder();
 }
 
 // =============================================
 // PWA INSTALL
 // =============================================
 
-function setupInstallPrompt() {
-  window.addEventListener('beforeinstallprompt', (e) => {
-    e.preventDefault();
-    deferredInstallPrompt = e;
-    const banner = document.getElementById('install-banner');
-    if (banner) {
-      setTimeout(() => banner.classList.remove('hidden'), 3000);
-    }
-  });
+window.addEventListener('beforeinstallprompt', (e) => {
+  e.preventDefault();
+  deferredInstallPrompt = e;
+  document.getElementById('install-banner')?.classList.remove('hidden');
+});
 
-  window.addEventListener('appinstalled', () => {
-    document.getElementById('install-banner')?.classList.add('hidden');
-    showToast('🎉', 'Pareshaan install ho gaya!');
-    deferredInstallPrompt = null;
-  });
+window.addEventListener('appinstalled', () => {
+  document.getElementById('install-banner')?.classList.add('hidden');
+  showToast('🎉', 'Pareshaan installed!');
+});
+
+async function installApp() {
+  if (!deferredInstallPrompt) return;
+  deferredInstallPrompt.prompt();
+  await deferredInstallPrompt.userChoice;
+  deferredInstallPrompt = null;
+  document.getElementById('install-banner')?.classList.add('hidden');
 }
 
 // =============================================
@@ -1058,15 +2188,14 @@ function setupInstallPrompt() {
 // =============================================
 
 function setupEventListeners() {
+
   // Theme toggle
   document.getElementById('theme-toggle')?.addEventListener('click', toggleTheme);
 
-  // Notification button
-  document.getElementById('notif-btn')?.addEventListener('click', () => {
-    NotificationManager.requestPermission();
-  });
+  // Notification permission
+  document.getElementById('notif-btn')?.addEventListener('click', () => NotificationManager.requestPermission());
 
-  // Tab navigation
+  // Tabs
   document.querySelectorAll('.tab-btn').forEach(btn => {
     btn.addEventListener('click', () => switchTab(btn.dataset.tab));
   });
@@ -1076,21 +2205,49 @@ function setupEventListeners() {
   document.getElementById('add-alarm-btn')?.addEventListener('click', () => openAlarmModal());
   document.getElementById('add-reminder-btn')?.addEventListener('click', () => openReminderModal());
 
-  // Save buttons
-  document.getElementById('save-task-btn')?.addEventListener('click', saveTask);
-  document.getElementById('save-alarm-btn')?.addEventListener('click', saveAlarm);
-  document.getElementById('save-reminder-btn')?.addEventListener('click', saveReminder);
+  // FAB
+  document.getElementById('fab-btn')?.addEventListener('click', toggleFabMenu);
+  document.getElementById('fab-overlay')?.addEventListener('click', closeFabMenu);
+  document.getElementById('fab-task')?.addEventListener('click', () => { closeFabMenu(); openTaskModal(); });
+  document.getElementById('fab-alarm')?.addEventListener('click', () => { closeFabMenu(); openAlarmModal(); });
+  document.getElementById('fab-reminder')?.addEventListener('click', () => { closeFabMenu(); openReminderModal(); });
 
-  // Modal close buttons
+  // Modal close (generic)
   document.querySelectorAll('[data-close]').forEach(btn => {
     btn.addEventListener('click', () => closeModal(btn.dataset.close));
   });
-
-  // Close modal on overlay click
   document.querySelectorAll('.modal-overlay').forEach(overlay => {
     overlay.addEventListener('click', (e) => {
-      if (e.target === overlay) overlay.classList.add('hidden');
+      if (e.target === overlay && overlay.id !== 'alarm-ring-modal' && overlay.id !== 'pin-lock-overlay') {
+        overlay.classList.add('hidden');
+      }
     });
+  });
+
+  // Task modal save
+  document.getElementById('save-task-btn')?.addEventListener('click', saveTask);
+  document.getElementById('add-subtask-btn')?.addEventListener('click', addSubtaskRow);
+  document.getElementById('subtask-new-input')?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); addSubtaskRow(); }
+  });
+  document.getElementById('subtask-editor-list')?.addEventListener('click', (e) => {
+    const check = e.target.closest('.subtask-edit-check');
+    const remove = e.target.closest('.subtask-edit-remove');
+    if (check) {
+      const sub = modalSubtasks.find(s => s.id === check.dataset.subId);
+      if (sub) { sub.done = !sub.done; renderSubtaskEditor(); }
+    }
+    if (remove) {
+      modalSubtasks = modalSubtasks.filter(s => s.id !== remove.dataset.subId);
+      renderSubtaskEditor();
+    }
+  });
+  document.getElementById('subtask-editor-list')?.addEventListener('input', (e) => {
+    const input = e.target.closest('.subtask-edit-input');
+    if (input) {
+      const sub = modalSubtasks.find(s => s.id === input.dataset.subId);
+      if (sub) sub.text = input.value;
+    }
   });
 
   // Filter chips
@@ -1102,218 +2259,304 @@ function setupEventListeners() {
     });
   });
 
+  // Task search
+  const searchInput = document.getElementById('task-search');
+  const searchClear = document.getElementById('task-search-clear');
+  searchInput?.addEventListener('input', (e) => {
+    taskSearchQuery = e.target.value;
+    searchClear?.classList.toggle('hidden', !taskSearchQuery);
+    renderTasks(getCurrentFilter());
+  });
+  searchClear?.addEventListener('click', () => {
+    taskSearchQuery = '';
+    if (searchInput) searchInput.value = '';
+    searchClear.classList.add('hidden');
+    renderTasks(getCurrentFilter());
+  });
+
+  // Task sort
+  document.getElementById('task-sort')?.addEventListener('change', (e) => {
+    taskSortMode = e.target.value;
+    renderTasks(getCurrentFilter());
+  });
+
+  // Bulk select
+  document.getElementById('bulk-select-btn')?.addEventListener('click', toggleBulkMode);
+  document.getElementById('bulk-cancel-btn')?.addEventListener('click', toggleBulkMode);
+  document.getElementById('bulk-complete-btn')?.addEventListener('click', bulkCompleteSelected);
+  document.getElementById('bulk-delete-btn')?.addEventListener('click', bulkDeleteSelected);
+
+  // Toast undo
+  document.getElementById('toast-undo')?.addEventListener('click', undoLastDelete);
+
   // Task list events (delegated)
   document.getElementById('task-list')?.addEventListener('click', (e) => {
     const checkbox = e.target.closest('.task-checkbox');
     const editBtn = e.target.closest('.edit-task');
     const deleteBtn = e.target.closest('.delete-task');
+    const subMini = e.target.closest('.subtask-mini-item');
 
-    if (checkbox) toggleTask(checkbox.dataset.id);
+    if (subMini) {
+      toggleSubtaskDone(subMini.dataset.taskId, subMini.dataset.subId);
+      return;
+    }
+    if (checkbox) {
+      if (bulkMode) toggleTaskSelection(checkbox.dataset.id);
+      else toggleTask(checkbox.dataset.id);
+      return;
+    }
     if (editBtn) openTaskModal(editBtn.dataset.id);
     if (deleteBtn) deleteTask(deleteBtn.dataset.id);
   });
 
+  // Drag & drop on task list
+  const taskList = document.getElementById('task-list');
+  taskList?.addEventListener('dragstart', (e) => {
+    const card = e.target.closest('.task-card');
+    if (card) handleTaskDragStart(e, card.dataset.id);
+  });
+  taskList?.addEventListener('dragover', handleTaskDragOver);
+  taskList?.addEventListener('dragleave', handleTaskDragLeave);
+  taskList?.addEventListener('drop', (e) => {
+    const card = e.target.closest('.task-card');
+    if (card) handleTaskDrop(e, card.dataset.id);
+  });
+  taskList?.addEventListener('dragend', handleTaskDragEnd);
+
+  // Alarm modal
+  document.getElementById('save-alarm-btn')?.addEventListener('click', saveAlarm);
+  document.querySelectorAll('.day-btn').forEach(btn => {
+    btn.addEventListener('click', () => toggleDaySelection(parseInt(btn.dataset.day, 10)));
+  });
+  document.getElementById('alarm-sound-upload')?.addEventListener('change', (e) => {
+    handleCustomSoundUpload(e.target.files[0]);
+  });
+  document.getElementById('clear-custom-sound-btn')?.addEventListener('click', clearCustomSound);
+
   // Alarm list events (delegated)
   document.getElementById('alarm-list')?.addEventListener('click', (e) => {
-    const deleteBtn = e.target.closest('.alarm-delete-btn');
+    const editBtn = e.target.closest('.edit-alarm');
+    const deleteBtn = e.target.closest('.delete-alarm');
+    const groupToggle = e.target.closest('.group-toggle-btn');
+    if (editBtn) openAlarmModal(editBtn.dataset.id);
     if (deleteBtn) deleteAlarm(deleteBtn.dataset.id);
+    if (groupToggle) toggleAlarmGroup(groupToggle.dataset.group, groupToggle.dataset.state === 'off');
   });
-
   document.getElementById('alarm-list')?.addEventListener('change', (e) => {
     const toggle = e.target.closest('.alarm-toggle');
     if (toggle) toggleAlarm(toggle.dataset.id, toggle.checked);
   });
 
+  // Reminder modal
+  document.getElementById('save-reminder-btn')?.addEventListener('click', saveReminder);
+  document.getElementById('reminder-location-check')?.addEventListener('change', (e) => {
+    document.getElementById('reminder-location-fields')?.classList.toggle('hidden', !e.target.checked);
+  });
+  document.getElementById('capture-location-btn')?.addEventListener('click', captureCurrentLocation);
+  const radiusInput = document.getElementById('reminder-location-radius');
+  const radiusLabel = document.getElementById('radius-value');
+  const updateRadiusLabel = () => { if (radiusInput && radiusLabel) radiusLabel.textContent = `${radiusInput.value} m`; };
+  radiusInput?.addEventListener('input', updateRadiusLabel);
+  updateRadiusLabel();
+
   // Reminder list events (delegated)
   document.getElementById('reminder-list')?.addEventListener('click', (e) => {
-    const deleteBtn = e.target.closest('.reminder-delete-btn');
+    const editBtn = e.target.closest('.edit-reminder');
+    const deleteBtn = e.target.closest('.delete-reminder');
+    if (editBtn) openReminderModal(editBtn.dataset.id);
     if (deleteBtn) deleteReminder(deleteBtn.dataset.id);
   });
-
-  // Day picker
-  document.querySelectorAll('.day-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const day = parseInt(btn.dataset.day);
-      if (selectedDays.includes(day)) {
-        selectedDays = selectedDays.filter(d => d !== day);
-        btn.classList.remove('selected');
-      } else {
-        selectedDays.push(day);
-        btn.classList.add('selected');
-      }
-    });
+  document.getElementById('reminder-list')?.addEventListener('change', (e) => {
+    const toggle = e.target.closest('.reminder-toggle');
+    if (toggle) toggleReminder(toggle.dataset.id, toggle.checked);
   });
-
-  // Alarm ring modal
-  document.getElementById('stop-alarm-btn')?.addEventListener('click', () => AlarmSystem.stopRinging());
-  document.getElementById('snooze-btn')?.addEventListener('click', () => AlarmSystem.snooze());
-
-  // FAB
-  document.getElementById('fab-btn')?.addEventListener('click', toggleFabMenu);
-  document.getElementById('fab-overlay')?.addEventListener('click', closeFabMenu);
-  document.getElementById('fab-task')?.addEventListener('click', () => { closeFabMenu(); openTaskModal(); });
-  document.getElementById('fab-alarm')?.addEventListener('click', () => { closeFabMenu(); openAlarmModal(); });
-  document.getElementById('fab-reminder')?.addEventListener('click', () => { closeFabMenu(); openReminderModal(); });
 
   // Daily reminder toggle
   document.getElementById('daily-reminder-toggle')?.addEventListener('change', (e) => {
     state.settings.dailyReminder = e.target.checked;
+    document.getElementById('daily-time-row').style.display = e.target.checked ? 'flex' : 'none';
     saveState();
-    const timeRow = document.getElementById('daily-time-row');
-    if (timeRow) timeRow.style.display = e.target.checked ? 'flex' : 'none';
     if (e.target.checked) {
-      NotificationManager.requestPermission().then(granted => {
-        if (granted) {
-          scheduleDailyReminder();
-          showToast('🌅', 'Daily reminder on!');
-        }
-      });
+      NotificationManager.requestPermission();
+      scheduleDailyReminder();
+      showToast('🌅', 'Daily reminder enabled!');
     } else {
-      showToast('🔕', 'Daily reminder off');
+      showToast('🔕', 'Daily reminder disabled');
     }
   });
-
   document.getElementById('save-daily-time')?.addEventListener('click', () => {
-    const time = document.getElementById('daily-reminder-time').value;
-    state.settings.dailyReminderTime = time;
+    state.settings.dailyReminderTime = document.getElementById('daily-reminder-time').value;
     saveState();
     scheduleDailyReminder();
-    showToast('✅', `Daily reminder set for ${formatTime12(time)}`);
+    showToast('✅', 'Reminder time saved!');
   });
 
-  // Install banner
-  document.getElementById('install-btn')?.addEventListener('click', async () => {
-    if (deferredInstallPrompt) {
-      deferredInstallPrompt.prompt();
-      const { outcome } = await deferredInstallPrompt.userChoice;
-      if (outcome === 'accepted') showToast('🎉', 'Installing Pareshaan...');
-      deferredInstallPrompt = null;
-      document.getElementById('install-banner')?.classList.add('hidden');
+  // Calendar
+  document.getElementById('cal-prev-btn')?.addEventListener('click', () => calendarNavigate(-1));
+  document.getElementById('cal-next-btn')?.addEventListener('click', () => calendarNavigate(1));
+  document.querySelectorAll('.cal-mode-btn').forEach(btn => {
+    btn.addEventListener('click', () => setCalendarMode(btn.dataset.mode));
+  });
+  document.getElementById('calendar-grid')?.addEventListener('click', (e) => {
+    const day = e.target.closest('.cal-day:not(.empty)');
+    if (day) selectCalendarDate(day.dataset.date);
+  });
+
+  // Settings
+  document.getElementById('settings-language')?.addEventListener('change', (e) => setLanguage(e.target.value));
+  document.getElementById('settings-accent')?.addEventListener('click', (e) => {
+    const swatch = e.target.closest('.accent-swatch');
+    if (swatch) setAccentColor(swatch.dataset.color);
+  });
+  document.getElementById('settings-snooze')?.addEventListener('change', (e) => setSnoozeMinutes(e.target.value));
+  document.getElementById('settings-pin-toggle')?.addEventListener('change', (e) => {
+    if (e.target.checked) {
+      document.getElementById('pin-setup-fields')?.classList.remove('hidden');
+    } else {
+      disablePinLock();
     }
   });
-
-  document.getElementById('install-close')?.addEventListener('click', () => {
-    document.getElementById('install-banner')?.classList.add('hidden');
+  document.getElementById('pin-setup-confirm-btn')?.addEventListener('click', () => {
+    const pin = document.getElementById('pin-setup-input').value.trim();
+    if (!/^\d{4}$/.test(pin)) {
+      showToast('⚠️', 'PIN must be exactly 4 digits');
+      return;
+    }
+    enablePinLock(pin);
+    document.getElementById('pin-setup-input').value = '';
   });
 
-  // Confirm dialog
-  document.getElementById('confirm-ok')?.addEventListener('click', () => {
-    closeModal('confirm-modal');
-    if (confirmCallback) { confirmCallback(); confirmCallback = null; }
+  // PIN lock screen
+  document.getElementById('pin-unlock-btn')?.addEventListener('click', () => {
+    const input = document.getElementById('pin-input');
+    PinLock.verify(input.value.trim());
+  });
+  document.getElementById('pin-input')?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') PinLock.verify(e.target.value.trim());
   });
 
-  document.getElementById('confirm-cancel')?.addEventListener('click', () => {
-    closeModal('confirm-modal');
-    confirmCallback = null;
+  // Export / Import
+  document.getElementById('export-data')?.addEventListener('click', exportData);
+  document.getElementById('import-data')?.addEventListener('click', () => {
+    document.getElementById('import-file-input')?.click();
   });
+  document.getElementById('import-file-input')?.addEventListener('change', importData);
 
   // Clear all data
   document.getElementById('clear-all-data')?.addEventListener('click', () => {
-    showConfirm('Saara data delete ho jayega! Pakka karna chahte ho?', () => {
-      localStorage.removeItem(APP_KEY);
+    showConfirm('All your data will be deleted! Are you sure?', () => {
       state = JSON.parse(JSON.stringify(defaultState));
+      saveState();
       renderTasks();
       renderAlarms();
       renderReminders();
       updateStats();
-      showToast('🗑️', 'Saara data clear ho gaya!');
+      renderInsights();
+      showToast('🗑️', 'All data cleared!');
     });
+  });
+
+  // Confirm modal
+  document.getElementById('confirm-ok')?.addEventListener('click', () => {
+    if (confirmCallback) confirmCallback();
+    confirmCallback = null;
+    closeModal('confirm-modal');
+  });
+  document.getElementById('confirm-cancel')?.addEventListener('click', () => {
+    confirmCallback = null;
+    closeModal('confirm-modal');
+  });
+
+  // Alarm ring modal
+  document.getElementById('snooze-btn')?.addEventListener('click', () => AlarmSystem.snooze());
+  document.getElementById('stop-alarm-btn')?.addEventListener('click', () => AlarmSystem.stopRinging());
+
+  // Install banner
+  document.getElementById('install-btn')?.addEventListener('click', installApp);
+  document.getElementById('install-close')?.addEventListener('click', () => {
+    document.getElementById('install-banner')?.classList.add('hidden');
+  });
+
+  // Update banner
+  document.getElementById('update-btn')?.addEventListener('click', () => {
+    if (newServiceWorker) newServiceWorker.postMessage({ type: 'SKIP_WAITING' });
+    else window.location.reload();
+    document.getElementById('update-banner')?.classList.add('hidden');
+  });
+  document.getElementById('update-close')?.addEventListener('click', () => {
+    document.getElementById('update-banner')?.classList.add('hidden');
   });
 
   // Keyboard shortcuts
   document.addEventListener('keydown', (e) => {
+    const tag = (e.target.tagName || '').toLowerCase();
+    const typing = tag === 'input' || tag === 'textarea' || e.target.isContentEditable;
+
     if (e.key === 'Escape') {
-      document.querySelectorAll('.modal-overlay:not(.hidden)').forEach(m => m.classList.add('hidden'));
+      closeAllModals();
       closeFabMenu();
+      return;
     }
+    if (typing) return;
+
+    if (e.key === '/') { e.preventDefault(); document.getElementById('task-search')?.focus(); }
+    if (e.key.toLowerCase() === 'n') openTaskModal();
+    if (e.key.toLowerCase() === 'a') openAlarmModal();
+    if (e.key.toLowerCase() === 'r') openReminderModal();
   });
-
-  // Handle URL params for shortcuts
-  const params = new URLSearchParams(window.location.search);
-  if (params.get('action') === 'add-task') setTimeout(() => openTaskModal(), 500);
-  if (params.get('action') === 'add-alarm') setTimeout(() => { switchTab('alarms'); openAlarmModal(); }, 500);
 }
 
 // =============================================
-// SPLASH SCREEN
+// INIT
 // =============================================
 
-function hideSplash() {
-  const splash = document.getElementById('splash-screen');
-  const app = document.getElementById('app');
-  if (splash && app) {
-    setTimeout(() => {
-      splash.style.opacity = '0';
-      setTimeout(() => {
-        splash.style.display = 'none';
-        app.classList.remove('hidden');
-      }, 500);
-    }, 2000);
-  }
-}
-
-// =============================================
-// INIT DAILY REMINDER UI
-// =============================================
-
-function initDailyReminderUI() {
-  const toggle = document.getElementById('daily-reminder-toggle');
-  const timeRow = document.getElementById('daily-time-row');
-  const timeInput = document.getElementById('daily-reminder-time');
-
-  if (toggle) toggle.checked = state.settings.dailyReminder;
-  if (timeRow) timeRow.style.display = state.settings.dailyReminder ? 'flex' : 'none';
-  if (timeInput) timeInput.value = state.settings.dailyReminderTime || '08:00';
-}
-
-// =============================================
-// MAIN INIT
-// =============================================
-
-document.addEventListener('DOMContentLoaded', () => {
-  // Apply saved theme
+function startAppAfterUnlock() {
   applyTheme(state.settings.theme);
-
-  // Register service worker
-  registerServiceWorker();
-
-  // Setup install prompt
-  setupInstallPrompt();
-
-  // Setup event listeners
-  setupEventListeners();
-
-  // Init daily reminder UI
+  applyAccentColor(state.settings.accentColor);
+  applyTranslations();
   initDailyReminderUI();
-
-  // Render initial data
   renderTasks();
   renderAlarms();
   renderReminders();
   updateStats();
-
-  // Start live clock
   updateClock();
   setInterval(updateClock, 1000);
-
-  // Start alarm system
   AlarmSystem.start();
+  LocationReminders.start();
+  checkBackupReminder();
 
-  // Schedule daily reminder if enabled
-  if (state.settings.dailyReminder) scheduleDailyReminder();
+  document.getElementById('splash-screen')?.classList.add('hidden');
+  document.getElementById('app')?.classList.remove('hidden');
 
-  // Hide splash
-  hideSplash();
-
-  // Welcome notification (first time)
   const isFirstVisit = !localStorage.getItem('pareshaan_visited');
   if (isFirstVisit) {
-    localStorage.setItem('pareshaan_visited', '1');
+    localStorage.setItem('pareshaan_visited', 'true');
     setTimeout(() => {
-      showToast('👋', 'Pareshaan mein aapka swagat hai!', 4000);
-    }, 2500);
+      showToast('👋', 'Welcome to Pareshaan!', 4000);
+    }, 800);
+  }
+}
+
+function init() {
+  console.log('%c⏰ Pareshaan v3.0.0', 'color: #7c3aed; font-size: 18px; font-weight: bold;');
+
+  setupEventListeners();
+  registerServiceWorker();
+
+  if (Notification && Notification.permission === 'granted') {
+    state.settings.notificationsEnabled = true;
   }
 
-  console.log('%c⏰ Pareshaan v1.0.0', 'color: #7c3aed; font-size: 18px; font-weight: bold;');
-  console.log('%cMade by Manish Rajdoot', 'color: #ec4899; font-size: 12px;');
-});
+  setTimeout(() => {
+    if (PinLock.isLockedNow()) {
+      PinLock.showLockScreen();
+    } else {
+      startAppAfterUnlock();
+      const params = new URLSearchParams(window.location.search);
+      if (params.get('action') === 'add-task') setTimeout(() => openTaskModal(), 500);
+      if (params.get('action') === 'add-alarm') setTimeout(() => { switchTab('alarms'); openAlarmModal(); }, 500);
+    }
+  }, 1200);
+}
+
+document.addEventListener('DOMContentLoaded', init);

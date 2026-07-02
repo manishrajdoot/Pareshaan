@@ -1,7 +1,7 @@
-// Pareshaan Service Worker v1.0
+// Pareshaan Service Worker v3.0
 // Made by Manish Rajdoot
 
-const CACHE_NAME = 'pareshaan-v1.0';
+const CACHE_NAME = 'pareshaan-v3.0';
 const ASSETS = [
   './',
   './index.html',
@@ -19,7 +19,10 @@ self.addEventListener('install', (event) => {
       return cache.addAll(ASSETS);
     })
   );
-  self.skipWaiting();
+  // Note: skipWaiting is NOT called automatically here.
+  // The new worker waits until the user confirms the update
+  // (see "SKIP_WAITING" message handler below), so an update
+  // never interrupts something the user is doing mid-task.
 });
 
 // Activate event - clean old caches
@@ -54,7 +57,7 @@ self.addEventListener('push', (event) => {
   const data = event.data ? event.data.json() : {};
   const title = data.title || '⏰ Pareshaan Reminder';
   const options = {
-    body: data.body || 'Aapka koi kaam pending hai!',
+    body: data.body || 'You have a pending task!',
     icon: './icons/icon-192.png',
     badge: './icons/icon-72.png',
     vibrate: [200, 100, 200, 100, 200],
@@ -98,7 +101,7 @@ async function checkAndNotify() {
   // This will be triggered by background sync
   const title = '⏰ Pareshaan';
   const options = {
-    body: 'Apne tasks check karo!',
+    body: 'Check your tasks!',
     icon: './icons/icon-192.png',
     badge: './icons/icon-72.png',
     vibrate: [300, 100, 300],
@@ -116,6 +119,10 @@ self.addEventListener('periodicsync', (event) => {
 
 // Message from main thread
 self.addEventListener('message', (event) => {
+  if (event.data && event.data.type === 'SKIP_WAITING') {
+    self.skipWaiting();
+    return;
+  }
   if (event.data && event.data.type === 'SHOW_NOTIFICATION') {
     const { title, body, tag } = event.data;
     self.registration.showNotification(title || '⏰ Pareshaan', {

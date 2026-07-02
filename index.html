@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="hi" data-theme="dark">
+<html lang="en" data-theme="dark">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-  <meta name="description" content="Pareshaan - Apne daily tasks aur reminders manage karo. Made by Manish Rajdoot." />
+  <meta name="description" content="Pareshaan - Manage your daily tasks, alarms & reminders. Made by Manish Rajdoot." />
   <meta name="theme-color" content="#7c3aed" />
   <meta name="mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
@@ -49,18 +49,46 @@
     </div>
   </div>
 
+  <!-- PIN Lock Screen -->
+  <div id="pin-lock-overlay" class="hidden">
+    <div class="pin-lock-content">
+      <div class="pin-lock-icon">🔒</div>
+      <h2>Pareshaan is locked</h2>
+      <p>Enter your 4-digit PIN to continue</p>
+      <input type="password" id="pin-input" inputmode="numeric" maxlength="4" pattern="[0-9]*" class="pin-input-field" placeholder="••••" autocomplete="off" />
+      <p id="pin-error" class="pin-error hidden">Incorrect PIN. Try again.</p>
+      <button class="btn-primary" id="pin-unlock-btn">🔓 Unlock</button>
+    </div>
+  </div>
+
   <!-- Install Banner -->
   <div id="install-banner" class="hidden">
     <div class="install-content">
       <span class="install-icon">📲</span>
       <div class="install-text">
         <strong>Install Pareshaan</strong>
-        <small>Home screen par add karo!</small>
+        <small>Add it to your home screen!</small>
       </div>
       <button id="install-btn" class="btn-install">Install</button>
       <button id="install-close" class="btn-close-install">✕</button>
     </div>
   </div>
+
+  <!-- Update Available Banner -->
+  <div id="update-banner" class="hidden">
+    <div class="install-content">
+      <span class="install-icon">⬆️</span>
+      <div class="install-text">
+        <strong>Update available</strong>
+        <small>A new version of Pareshaan is ready.</small>
+      </div>
+      <button id="update-btn" class="btn-install">Reload</button>
+      <button id="update-close" class="btn-close-install">✕</button>
+    </div>
+  </div>
+
+  <!-- Hidden audio element for custom alarm sounds -->
+  <audio id="custom-alarm-audio" preload="none"></audio>
 
   <!-- Main App -->
   <div id="app" class="hidden">
@@ -117,23 +145,46 @@
       </div>
     </section>
 
+    <!-- Progress Bar -->
+    <section class="progress-section" id="progress-section">
+      <div class="progress-header">
+        <span data-i18n="week_progress">Overall Progress</span>
+        <span id="progress-percent">0%</span>
+      </div>
+      <div class="progress-track">
+        <div class="progress-fill" id="progress-fill"></div>
+      </div>
+    </section>
+
     <!-- Navigation Tabs -->
     <nav class="tab-nav">
       <button class="tab-btn active" data-tab="tasks">
         <span class="tab-icon">📋</span>
-        <span>Tasks</span>
+        <span data-i18n="tab_tasks">Tasks</span>
       </button>
       <button class="tab-btn" data-tab="alarms">
         <span class="tab-icon">⏰</span>
-        <span>Alarms</span>
+        <span data-i18n="tab_alarms">Alarms</span>
       </button>
       <button class="tab-btn" data-tab="reminders">
         <span class="tab-icon">🔔</span>
-        <span>Reminders</span>
+        <span data-i18n="tab_reminders">Reminders</span>
+      </button>
+      <button class="tab-btn" data-tab="calendar">
+        <span class="tab-icon">📅</span>
+        <span data-i18n="tab_calendar">Calendar</span>
+      </button>
+      <button class="tab-btn" data-tab="insights">
+        <span class="tab-icon">📊</span>
+        <span data-i18n="tab_insights">Insights</span>
+      </button>
+      <button class="tab-btn" data-tab="settings">
+        <span class="tab-icon">⚙️</span>
+        <span data-i18n="tab_settings">Settings</span>
       </button>
       <button class="tab-btn" data-tab="about">
         <span class="tab-icon">ℹ️</span>
-        <span>About</span>
+        <span data-i18n="tab_about">About</span>
       </button>
     </nav>
 
@@ -143,8 +194,39 @@
       <!-- TASKS TAB -->
       <section id="tab-tasks" class="tab-panel active">
         <div class="panel-header">
-          <h2>📋 My Tasks</h2>
-          <button class="btn-add" id="add-task-btn">+ Add Task</button>
+          <h2 data-i18n="my_tasks">📋 My Tasks</h2>
+          <div class="panel-header-actions">
+            <button class="btn-select" id="bulk-select-btn" data-i18n="select_btn">☑ Select</button>
+            <button class="btn-add" id="add-task-btn" data-i18n="add_task">+ Add Task</button>
+          </div>
+        </div>
+
+        <!-- Bulk Toolbar -->
+        <div class="bulk-toolbar hidden" id="bulk-toolbar">
+          <span id="bulk-count">0 selected</span>
+          <div class="bulk-toolbar-actions">
+            <button class="btn-secondary" id="bulk-complete-btn" data-i18n="complete_btn">✅ Complete</button>
+            <button class="btn-danger" id="bulk-delete-btn" data-i18n="delete_btn">🗑️ Delete</button>
+            <button class="btn-secondary" id="bulk-cancel-btn" data-i18n="cancel_btn">Cancel</button>
+          </div>
+        </div>
+
+        <!-- Search & Sort -->
+        <div class="search-sort-row">
+          <div class="search-box">
+            <span class="search-icon">🔍</span>
+            <input type="text" id="task-search" class="search-input" placeholder="Search tasks or tags..." data-i18n-placeholder="search_placeholder" />
+            <button id="task-search-clear" class="search-clear hidden" title="Clear search">✕</button>
+          </div>
+          <select id="task-sort" class="form-select sort-select">
+            <option value="default">Sort: Default</option>
+            <option value="manual">Sort: Manual (drag)</option>
+            <option value="newest">Sort: Newest</option>
+            <option value="oldest">Sort: Oldest</option>
+            <option value="priority">Sort: Priority</option>
+            <option value="due">Sort: Due Date</option>
+            <option value="az">Sort: A-Z</option>
+          </select>
         </div>
 
         <!-- Filter Chips -->
@@ -152,6 +234,8 @@
           <button class="chip active" data-filter="all">All</button>
           <button class="chip" data-filter="pending">Pending</button>
           <button class="chip" data-filter="done">Completed</button>
+          <button class="chip" data-filter="today">📅 Today</button>
+          <button class="chip" data-filter="overdue">⚠️ Overdue</button>
           <button class="chip" data-filter="high">🔴 High</button>
           <button class="chip" data-filter="medium">🟡 Medium</button>
           <button class="chip" data-filter="low">🟢 Low</button>
@@ -161,8 +245,8 @@
         <div id="task-list" class="task-list">
           <div class="empty-state" id="tasks-empty">
             <div class="empty-icon">📝</div>
-            <h3>Koi task nahi hai!</h3>
-            <p>Apna pehla task add karo aur shuru ho jao.</p>
+            <h3 data-i18n="empty_tasks_title">No tasks yet!</h3>
+            <p data-i18n="empty_tasks_desc">Add your first task and get started.</p>
           </div>
         </div>
       </section>
@@ -170,16 +254,16 @@
       <!-- ALARMS TAB -->
       <section id="tab-alarms" class="tab-panel">
         <div class="panel-header">
-          <h2>⏰ Alarms</h2>
-          <button class="btn-add" id="add-alarm-btn">+ Add Alarm</button>
+          <h2 data-i18n="my_alarms">⏰ Alarms</h2>
+          <button class="btn-add" id="add-alarm-btn" data-i18n="add_alarm">+ Add Alarm</button>
         </div>
 
         <!-- Alarm List -->
         <div id="alarm-list" class="alarm-list">
           <div class="empty-state" id="alarms-empty">
             <div class="empty-icon">⏰</div>
-            <h3>Koi alarm nahi hai!</h3>
-            <p>Apna pehla alarm set karo.</p>
+            <h3 data-i18n="empty_alarms_title">No alarms yet!</h3>
+            <p data-i18n="empty_alarms_desc">Set your first alarm.</p>
           </div>
         </div>
       </section>
@@ -187,8 +271,8 @@
       <!-- REMINDERS TAB -->
       <section id="tab-reminders" class="tab-panel">
         <div class="panel-header">
-          <h2>🔔 Daily Reminders</h2>
-          <button class="btn-add" id="add-reminder-btn">+ Add Reminder</button>
+          <h2 data-i18n="daily_reminders">🔔 Daily Reminders</h2>
+          <button class="btn-add" id="add-reminder-btn" data-i18n="add_reminder">+ Add Reminder</button>
         </div>
 
         <!-- Daily Reminder Toggle -->
@@ -196,8 +280,8 @@
           <div class="reminder-daily-info">
             <span class="reminder-daily-icon">🌅</span>
             <div>
-              <strong>Daily Morning Reminder</strong>
-              <small>Roz subah yaad dilata rahe</small>
+              <strong data-i18n="daily_morning">Daily Morning Reminder</strong>
+              <small data-i18n="daily_morning_desc">Get reminded every morning</small>
             </div>
           </div>
           <label class="toggle-switch">
@@ -216,9 +300,124 @@
         <div id="reminder-list" class="reminder-list">
           <div class="empty-state" id="reminders-empty">
             <div class="empty-icon">🔔</div>
-            <h3>Koi reminder nahi hai!</h3>
-            <p>Apna pehla reminder add karo.</p>
+            <h3 data-i18n="empty_reminders_title">No reminders yet!</h3>
+            <p data-i18n="empty_reminders_desc">Add your first reminder.</p>
           </div>
+        </div>
+      </section>
+
+      <!-- CALENDAR TAB -->
+      <section id="tab-calendar" class="tab-panel">
+        <div class="panel-header">
+          <h2 data-i18n="calendar_title">📅 Calendar</h2>
+          <div class="cal-mode-switch">
+            <button class="cal-mode-btn active" data-mode="month">Month</button>
+            <button class="cal-mode-btn" data-mode="week">Week</button>
+          </div>
+        </div>
+
+        <div class="calendar-nav">
+          <button class="cal-nav-btn" id="cal-prev-btn">←</button>
+          <span id="calendar-month-label" class="calendar-month-label">Month Year</span>
+          <button class="cal-nav-btn" id="cal-next-btn">→</button>
+        </div>
+
+        <div class="calendar-legend">
+          <span><span class="cal-dot dot-task"></span> Tasks</span>
+          <span><span class="cal-dot dot-alarm"></span> Alarms</span>
+          <span><span class="cal-dot dot-reminder"></span> Reminders</span>
+        </div>
+
+        <div id="calendar-grid" class="calendar-grid"></div>
+
+        <div class="agenda-section">
+          <h3 id="agenda-date-label" class="agenda-date-label">Today</h3>
+          <div id="agenda-list" class="agenda-list"></div>
+        </div>
+      </section>
+
+      <!-- INSIGHTS TAB -->
+      <section id="tab-insights" class="tab-panel">
+        <div class="panel-header">
+          <h2 data-i18n="insights_title">📊 Insights</h2>
+        </div>
+
+        <div class="insights-cards-row">
+          <div class="insight-card">
+            <span class="insight-icon">🔥</span>
+            <span class="insight-value" id="insight-streak">0 days</span>
+            <span class="insight-label">Current Streak</span>
+          </div>
+          <div class="insight-card">
+            <span class="insight-icon">✅</span>
+            <span class="insight-value" id="insight-total-done">0</span>
+            <span class="insight-label">Total Completed</span>
+          </div>
+        </div>
+
+        <div class="insights-section">
+          <h3>Last 7 Days</h3>
+          <div id="week-chart" class="week-chart"></div>
+        </div>
+
+        <div class="insights-section">
+          <h3>By Category</h3>
+          <div id="category-breakdown" class="category-breakdown"></div>
+        </div>
+      </section>
+
+      <!-- SETTINGS TAB -->
+      <section id="tab-settings" class="tab-panel">
+        <div class="panel-header">
+          <h2 data-i18n="settings_title">⚙️ Settings</h2>
+        </div>
+
+        <div class="settings-group">
+          <label class="settings-label">🌐 Language</label>
+          <select id="settings-language" class="form-select">
+            <option value="en">English</option>
+            <option value="hi">हिंदी (Hindi)</option>
+          </select>
+        </div>
+
+        <div class="settings-group">
+          <label class="settings-label">🎨 Accent Color</label>
+          <div class="accent-swatches" id="settings-accent">
+            <button class="accent-swatch active" data-color="purple" style="--swatch-color:#7c3aed" title="Purple"></button>
+            <button class="accent-swatch" data-color="blue" style="--swatch-color:#2563eb" title="Blue"></button>
+            <button class="accent-swatch" data-color="green" style="--swatch-color:#059669" title="Green"></button>
+            <button class="accent-swatch" data-color="pink" style="--swatch-color:#db2777" title="Pink"></button>
+            <button class="accent-swatch" data-color="orange" style="--swatch-color:#ea580c" title="Orange"></button>
+          </div>
+        </div>
+
+        <div class="settings-group">
+          <label class="settings-label">😴 Default Snooze Duration</label>
+          <select id="settings-snooze" class="form-select">
+            <option value="1">1 minute</option>
+            <option value="3">3 minutes</option>
+            <option value="5">5 minutes</option>
+            <option value="10">10 minutes</option>
+            <option value="15">15 minutes</option>
+          </select>
+        </div>
+
+        <div class="settings-group">
+          <div class="settings-row">
+            <label class="settings-label">🔒 App Lock (PIN)</label>
+            <label class="toggle-switch">
+              <input type="checkbox" id="settings-pin-toggle" />
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+          <div class="pin-setup-fields hidden" id="pin-setup-fields">
+            <input type="password" id="pin-setup-input" inputmode="numeric" maxlength="4" pattern="[0-9]*" class="form-input" placeholder="Set a 4-digit PIN" />
+            <button class="btn-secondary" id="pin-setup-confirm-btn">Set PIN</button>
+          </div>
+        </div>
+
+        <div class="settings-note">
+          <p>💡 <strong>Cloud sync:</strong> Pareshaan stays fully offline and local — use Export/Import Backup on the About tab to move data between devices.</p>
         </div>
       </section>
 
@@ -227,20 +426,30 @@
         <div class="about-card">
           <div class="about-logo">⏰</div>
           <h2 class="about-title">Pareshaan</h2>
-          <p class="about-version">Version 1.0.0</p>
+          <p class="about-version">Version 3.0.0</p>
           <p class="about-desc">
-            Pareshaan ek smart daily task manager aur reminder app hai jo aapko apne kaam yaad dilata rehta hai. 
-            Kabhi mat bhulo koi kaam — Pareshaan hai na! 😄
+            Pareshaan is a smart daily task manager and reminder app that keeps you on top of everything you need to do.
+            Never forget a task again — Pareshaan's got you covered! 😄
           </p>
           <div class="about-features">
-            <div class="feature-item">✅ Daily Task Management</div>
-            <div class="feature-item">⏰ Smart Alarms</div>
+            <div class="feature-item">✅ Tasks with Subtasks & Tags</div>
+            <div class="feature-item">🔁 Recurring Tasks</div>
+            <div class="feature-item">↕️ Drag & Drop Reorder</div>
+            <div class="feature-item">☑️ Bulk Select Actions</div>
+            <div class="feature-item">📅 Calendar & Week View</div>
+            <div class="feature-item">📊 Streaks & Analytics</div>
+            <div class="feature-item">⏰ Smart Alarms with Groups</div>
+            <div class="feature-item">🎵 Custom Alarm Sounds</div>
+            <div class="feature-item">📍 Location Reminders</div>
             <div class="feature-item">🔔 Push Notifications</div>
-            <div class="feature-item">📳 Vibration Alerts</div>
-            <div class="feature-item">🔊 Audio Sounds</div>
+            <div class="feature-item">🌐 English / Hindi</div>
+            <div class="feature-item">🎨 Custom Accent Themes</div>
+            <div class="feature-item">🔒 PIN App Lock</div>
             <div class="feature-item">🌙 Dark / Light Mode</div>
             <div class="feature-item">📱 Mobile Installable (PWA)</div>
             <div class="feature-item">💾 Offline Data Storage</div>
+            <div class="feature-item">📤 Export / Import Backup</div>
+            <div class="feature-item">⬆️ Auto Update Detection</div>
           </div>
           <div class="about-divider"></div>
           <div class="about-made">
@@ -254,6 +463,9 @@
             </a>
           </div>
           <div class="about-actions">
+            <button class="btn-secondary" id="export-data">📤 Export Backup</button>
+            <button class="btn-secondary" id="import-data">📥 Import Backup</button>
+            <input type="file" id="import-file-input" accept="application/json" class="hidden" />
             <button class="btn-danger" id="clear-all-data">🗑️ Clear All Data</button>
           </div>
         </div>
@@ -294,11 +506,11 @@
       <div class="modal-body">
         <div class="form-group">
           <label>Task Title *</label>
-          <input type="text" id="task-title" placeholder="Kya karna hai?" class="form-input" maxlength="100" />
+          <input type="text" id="task-title" placeholder="What needs to be done?" class="form-input" maxlength="100" />
         </div>
         <div class="form-group">
           <label>Description</label>
-          <textarea id="task-desc" placeholder="Thodi detail do..." class="form-textarea" rows="3" maxlength="300"></textarea>
+          <textarea id="task-desc" placeholder="Add a few details..." class="form-textarea" rows="3" maxlength="300"></textarea>
         </div>
         <div class="form-row">
           <div class="form-group half">
@@ -331,12 +543,39 @@
             <input type="time" id="task-time" class="form-input" />
           </div>
         </div>
+        <div class="form-row">
+          <div class="form-group half">
+            <label>Repeat</label>
+            <select id="task-recurrence" class="form-select">
+              <option value="none">Does not repeat</option>
+              <option value="daily">🔁 Daily</option>
+              <option value="weekly">🔁 Weekly</option>
+              <option value="weekdays">🔁 Weekdays</option>
+            </select>
+          </div>
+          <div class="form-group half">
+            <label>Tags</label>
+            <input type="text" id="task-tags" placeholder="e.g. urgent, home" class="form-input" maxlength="120" />
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Link / Note URL</label>
+          <input type="url" id="task-link" placeholder="https://..." class="form-input" maxlength="300" />
+        </div>
         <div class="form-group">
           <label class="checkbox-label">
             <input type="checkbox" id="task-reminder-check" />
             <span class="checkmark"></span>
             Set reminder for this task
           </label>
+        </div>
+        <div class="form-group">
+          <label>Subtasks / Checklist</label>
+          <div id="subtask-editor-list" class="subtask-editor-list"></div>
+          <div class="subtask-add-row">
+            <input type="text" id="subtask-new-input" placeholder="Add a subtask..." class="form-input" maxlength="80" />
+            <button class="btn-secondary btn-subtask-add" id="add-subtask-btn">+ Add</button>
+          </div>
         </div>
       </div>
       <div class="modal-footer">
@@ -356,7 +595,7 @@
       <div class="modal-body">
         <div class="form-group">
           <label>Alarm Label</label>
-          <input type="text" id="alarm-label" placeholder="Alarm ka naam..." class="form-input" maxlength="60" />
+          <input type="text" id="alarm-label" placeholder="Name your alarm..." class="form-input" maxlength="60" />
         </div>
         <div class="form-group">
           <label>Alarm Time *</label>
@@ -375,6 +614,10 @@
           </div>
         </div>
         <div class="form-group">
+          <label>Group (optional)</label>
+          <input type="text" id="alarm-group" placeholder="e.g. Work days, Weekend" class="form-input" maxlength="40" />
+        </div>
+        <div class="form-group">
           <label>Sound</label>
           <select id="alarm-sound" class="form-select">
             <option value="bell">🔔 Bell</option>
@@ -382,6 +625,15 @@
             <option value="chime">🎵 Chime</option>
             <option value="digital">💻 Digital</option>
           </select>
+        </div>
+        <div class="form-group">
+          <label>Custom Sound (optional, under 400 KB)</label>
+          <div class="custom-sound-row">
+            <label class="btn-secondary btn-file-label" for="alarm-sound-upload">📁 Choose File</label>
+            <input type="file" id="alarm-sound-upload" accept="audio/*" class="hidden" />
+            <span id="custom-sound-name" class="custom-sound-name">No custom sound</span>
+            <button class="btn-danger btn-small hidden" id="clear-custom-sound-btn" title="Remove custom sound">✕</button>
+          </div>
         </div>
         <div class="form-group">
           <label class="checkbox-label">
@@ -408,7 +660,7 @@
       <div class="modal-body">
         <div class="form-group">
           <label>Reminder Title *</label>
-          <input type="text" id="reminder-title" placeholder="Kya yaad dilana hai?" class="form-input" maxlength="80" />
+          <input type="text" id="reminder-title" placeholder="What should we remind you about?" class="form-input" maxlength="80" />
         </div>
         <div class="form-group">
           <label>Message</label>
@@ -433,6 +685,28 @@
             <option value="weekdays">Weekdays</option>
           </select>
         </div>
+        <div class="form-group">
+          <label class="checkbox-label">
+            <input type="checkbox" id="reminder-location-check" />
+            <span class="checkmark"></span>
+            📍 Remind me when I'm near a location
+          </label>
+          <p class="field-hint">Works only while Pareshaan is open in your browser (foreground-only — true background geofencing isn't supported by browsers yet).</p>
+        </div>
+        <div class="location-fields hidden" id="reminder-location-fields">
+          <div class="form-group">
+            <label>Location Name</label>
+            <input type="text" id="reminder-location-label" placeholder="e.g. Home, Office, Gym" class="form-input" maxlength="40" />
+          </div>
+          <div class="form-group">
+            <button class="btn-secondary" id="capture-location-btn" type="button">📍 Use My Current Location</button>
+            <p id="location-status" class="field-hint">No location set yet</p>
+          </div>
+          <div class="form-group">
+            <label>Radius: <span id="radius-value"></span></label>
+            <input type="range" id="reminder-location-radius" min="100" max="2000" step="100" value="300" class="form-range" />
+          </div>
+        </div>
       </div>
       <div class="modal-footer">
         <button class="btn-secondary" data-close="reminder-modal">Cancel</button>
@@ -455,7 +729,7 @@
       <h2 id="ring-label">Wake Up!</h2>
       <p id="ring-time" class="ring-time">00:00</p>
       <div class="ring-actions">
-        <button class="btn-snooze" id="snooze-btn">😴 Snooze 5 min</button>
+        <button class="btn-snooze" id="snooze-btn">😴 Snooze</button>
         <button class="btn-stop" id="stop-alarm-btn">✅ Stop</button>
       </div>
     </div>
@@ -465,6 +739,7 @@
   <div id="toast" class="toast hidden">
     <span id="toast-icon">✅</span>
     <span id="toast-msg">Done!</span>
+    <button id="toast-undo" class="toast-undo-btn hidden">Undo</button>
   </div>
 
   <!-- Confirm Dialog -->
