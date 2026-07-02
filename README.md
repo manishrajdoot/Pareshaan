@@ -1,5 +1,9 @@
 # ⏰ Pareshaan
 
+⏰ Pareshaan — A beautiful PWA for daily tasks, alarms & reminders. Mobile installable, offline-ready, dark mode, push notifications, vibration & audio alerts. Made by Manish Rajdoot.
+
+[Live Demo](https://manishrajdoot.github.io/Pareshaan/)
+
 **A beautiful, installable PWA for daily tasks, alarms & reminders.**
 
 Offline-ready · Dark/Light mode · Push notifications · Vibration & audio alerts · Works on mobile and desktop.
@@ -150,3 +154,4 @@ Licensed under the [Boost Software License 1.0](LICENSE).
 ## ❤️ Credits
 
 Made with love by **[Manish Rajdoot](https://github.com/manishrajdoot)**.
+
